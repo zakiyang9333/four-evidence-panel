@@ -184,15 +184,85 @@ SCHEMA = {
         'hook': {'type': 'string'}, 'story': {'type': 'string'}, 'final': {'type': 'string'},
         'watch': {'type': 'array', 'items': {'type': 'string'}},
         'steps': {'type': 'array', 'items': {
-            'type': 'object', 'additionalProperties': False, 'required': ['q', 'look', 'say', 'sticker', 'tone', 'evidence'],
-            'properties': {'q': {'type': 'string'}, 'look': {'type': 'string'}, 'say': {'type': 'string'}, 'sticker': {'type': 'string'},
-                           'tone': {'type': 'string', 'enum': ['good', 'bad', 'neutral']}, 'evidence': {'type': 'integer'}}}},
+            'type': 'object', 'additionalProperties': False, 'required': ['q', 'say', 'sticker', 'tone', 'evidence', 'draw'],
+            'properties': {'q': {'type': 'string'}, 'say': {'type': 'string'}, 'sticker': {'type': 'string'},
+                           'tone': {'type': 'string', 'enum': ['good', 'bad', 'neutral']}, 'evidence': {'type': 'integer'},
+                           'draw': {'type': 'array', 'items': {
+                               'type': 'object', 'additionalProperties': False, 'required': ['type', 'dates', 'at', 'price', 'top', 'bottom', 'label'],
+                               'properties': {'type': {'type': 'string', 'enum': ['point', 'path', 'level', 'zone', 'volume', 'macd']},
+                                              'dates': {'type': 'array', 'items': {'type': 'string'}},
+                                              'at': {'type': 'string', 'enum': ['high', 'low', 'open', 'close']},
+                                              'price': {'type': 'number'}, 'top': {'type': 'number'}, 'bottom': {'type': 'number'},
+                                              'label': {'type': 'string'}}}}}}},
     },
 }
 MIN_STEPS, MAX_STEPS = 2, 8
+MAX_DRAW = 8
 
 
-def normalize(raw, f, tmpl):
+def chart_data(t, asof):
+    """Bars up to `asof`, for turning Claude's drawing instructions into real chart coordinates."""
+    full = panel.load(t)['B']
+    i = panel.index_at(full, asof)
+    return dict(d=full['d'][:i + 1], idx={d: k for k, d in enumerate(full['d'][:i + 1])},
+                high=full['h'], low=full['l'], open=full['o'], close=full['c'])
+
+
+def _day(s, D):
+    """'2026-11-05' or '11-05' -> a trading day that exists on or before the reading's date, else None."""
+    s = str(s).strip()
+    m = re.fullmatch(r'(\d{4})-(\d{1,2})-(\d{1,2})', s)
+    if m:
+        key = f'{int(m[1]):04d}-{int(m[2]):02d}-{int(m[3]):02d}'
+        return key if key in D['idx'] else None
+    m = re.fullmatch(r'(\d{1,2})[-/月](\d{1,2})日?', s)
+    if m:
+        last = D['d'][-1]
+        year, mo, da = int(last[:4]), int(m[1]), int(m[2])
+        # 月-日 默认是当年的；只有比这次分析的日期还晚（比如 1 月里说“12-20”）才算去年的，不会把“明天”错当成去年同一天
+        y = year if (mo, da) <= (int(last[5:7]), int(last[8:10])) else (year - 1 if mo > int(last[5:7]) else None)
+        if y is not None:
+            key = f'{y:04d}-{mo:02d}-{da:02d}'
+            if key in D['idx']:
+                return key
+    return None
+
+
+def resolve_draw(items, D, forms):
+    """Claude says WHAT to mark (which days, high or low, which level); the prices are read from the data here.
+    Anything that points at a day that does not exist, or a level that is not a real number from the input, is dropped."""
+    out = []
+    if not isinstance(items, list):
+        return out
+    lo, hi = float(D['low'][max(0, len(D['d']) - 250):len(D['d'])].min()), float(D['high'][max(0, len(D['d']) - 250):len(D['d'])].max())
+    px = lambda day, at: round(float(D[at if at in ('high', 'low', 'open', 'close') else 'close'][D['idx'][day]]), 2)
+    for it in items[:MAX_DRAW]:
+        if not isinstance(it, dict):
+            continue
+        typ, at = it.get('type'), it.get('at')
+        label = str(it.get('label') or '').strip()[:10]
+        days = [d for d in (_day(x, D) for x in (it.get('dates') or [])) if d]
+        if typ == 'point' and days:
+            for d in days[:6]:
+                out.append(dict(type='point', date=d, price=px(d, at), label=label))
+        elif typ == 'path' and len(days) >= 2:
+            out.append(dict(type='path', points=[dict(date=d, price=px(d, at)) for d in days[:8]], label=label))
+        elif typ == 'level':
+            p = px(days[0], at) if days else (round(float(it['price']), 2) if isinstance(it.get('price'), (int, float)) and not isinstance(it.get('price'), bool) else None)
+            if p is not None and lo * 0.6 <= p <= hi * 1.4 and (days or p in forms):
+                out.append(dict(type='level', price=p, label=label))
+        elif typ == 'zone' and len(days) >= 2:
+            a, b = sorted((D['idx'][days[0]], D['idx'][days[-1]]))
+            top = it.get('top') if isinstance(it.get('top'), (int, float)) and it.get('top') else float(D['high'][a:b + 1].max())
+            bot = it.get('bottom') if isinstance(it.get('bottom'), (int, float)) and it.get('bottom') else float(D['low'][a:b + 1].min())
+            if lo * 0.6 <= bot < top <= hi * 1.4:
+                out.append(dict(type='zone', date_from=D['d'][a], date_to=D['d'][b], top=round(float(top), 2), bottom=round(float(bot), 2), label=label))
+        elif typ in ('volume', 'macd') and days:
+            out.append(dict(type=typ, dates=days[:8], label=label))
+    return out
+
+
+def normalize(raw, f, tmpl, D=None, forms=None):
     """Claude's JSON -> cards. Claude chooses what to look at, how many steps and in what order (zaki 11-16: 市场变化多，
     内容要完全自由，只保留模板版那种呈现方式)。What stays with the engine: a step that says it is about evidence 1–4 gets that
     evidence's true/false from the engine, and a sticker that contradicts it is replaced. Returns (narration, None) or (None, reason)."""
@@ -208,8 +278,9 @@ def normalize(raw, f, tmpl):
         out[key] = raw[key].strip()
     for k, s in enumerate(steps):
         look, say, q = s.get('look'), s.get('say'), s.get('q')
-        if not (isinstance(look, str) and look.strip() and isinstance(say, str) and say.strip()):
-            return None, f'第 {k + 1} 步缺少 look 或 say'
+        look = look if isinstance(look, str) else ''             # 新格式不要 look：数字画在图上，不写成一段话
+        if not (isinstance(say, str) and say.strip()):
+            return None, f'第 {k + 1} 步缺少 say'
         ev = s.get('evidence') if s.get('evidence') in (1, 2, 3, 4) else 0
         sticker = s.get('sticker').strip()[:8] if isinstance(s.get('sticker'), str) and s.get('sticker').strip() else ''
         tone = s.get('tone') if s.get('tone') in ('good', 'bad', 'neutral') else ('good' if sticker in GOOD else 'bad' if sticker in BAD else 'neutral')
@@ -220,7 +291,8 @@ def normalize(raw, f, tmpl):
             if (ok and tone == 'bad') or (not ok and tone == 'good'):
                 sticker, tone = t['sticker'], ('good' if ok else 'bad')
         out['steps'].append(dict(q=q.strip()[:20] if isinstance(q, str) and q.strip() else f'第 {k + 1} 步', look=look.strip(), say=say.strip(),
-                                 sticker=sticker, tone=tone, evidence=ev, ok=ok))
+                                 sticker=sticker, tone=tone, evidence=ev, ok=ok,
+                                 draw=resolve_draw(s.get('draw'), D, forms or set()) if D else []))
     # 大字结论不能和引擎唱反调
     fin = out['final']
     if (f['all4'] and re.search(r'不抄|未触发|不可|别', fin)) or (not f['all4'] and not re.search(r'不抄|未触发|还不|不可|别|不够|再等|等', fin)) or len(fin) > 16:
@@ -279,7 +351,7 @@ def bad_numbers(narr, allowed):
                     forms.add(round(d, k)); forms.add(round(p, k)); forms.add(round(q, k))
     texts = [narr['hook'], narr['story'], narr['final']] + list(narr['watch'])
     for s in narr['steps']:
-        texts += [s['look'], s['say']]
+        texts += [s.get('look') or '', s['say']] + [d.get('label') or '' for d in s.get('draw') or []]
     bad = []
     for t in texts:
         for m in NUM.findall(t.replace(',', '')):

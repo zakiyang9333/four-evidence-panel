@@ -316,7 +316,7 @@ function tick(force) {
   const resized = syncOverlay() || force === true;
   if (S.needFocus && OV.w > 80) { S.needFocus = false; focusView(S.span || 150); }
   const a = X(0), b = X(100), y1 = Y(1), y2 = Y(2);
-  const sig = [a, b, y1, y2, S.rev].join('|');
+  const sig = [a, b, y1, y2, S.rev, flashAnimating() ? performance.now() : 0].join('|');     // 标记正在一笔一笔画的时候，每帧都重画
   if (resized || sig !== lastSig) { lastSig = sig; draw(); placeLegends(); }
 }
 
@@ -618,7 +618,7 @@ async function setTicker(t, date) {
   const b = await api('/api/bars?ticker=' + t + '&tf=' + S.tf);
   if (b.ok === false) return toast(b.error, true);
   S.bars = b; S.idx = {}; b.d.forEach((d, i) => { S.idx[d] = i; });
-  S.state = null; S.avwap = {}; S.hover = null; S.flash = null;
+  S.state = null; S.avwap = {}; S.hover = null; S.flash = null; S.spanHome = null;
   window.FENarrate.reset();
   if (S.live && S.live.ticker !== t) S.live = null;
   setTimeout(pollLive, 0);
@@ -818,23 +818,153 @@ function renderSide() {
 
 // ---------- 解说和图的联动 ----------
 /* 点哪一问，图上对应的位置闪一下：第一问成交量副图（和地量日），第二问 MACD 副图和低点，第三问扇子中线，第四问成本线。只是高亮，不改任何数据。 */
-function flashStep(k) {
+/* 自由分析的卡片没有固定位置，就从它的文字里读：提到的日期圈出那根 K 线，提到的价位圈在那根 K 线的对应价格上，
+   找不到对应 K 线的价位画成横线。只读文字、只画高亮，不改任何数据。 */
+function parseCard(text) {
+  const b = S.bars, year = Number(asofDate().slice(0, 4)), days = [], spans = [];
+  const find = (y, mo, da) => { const i = S.idx[y + '-' + String(mo).padStart(2, '0') + '-' + String(da).padStart(2, '0')]; return i != null && i <= S.asof ? i : null; };
+  const dre = /(\d{4})-(\d{1,2})-(\d{1,2})|(?<![\d.\-])(\d{1,2})-(\d{1,2})(?![\d.\-])|(\d{1,2})月(\d{1,2})日/g;
+  let m;
+  while ((m = dre.exec(text))) {
+    let i = null;
+    if (m[1]) i = find(+m[1], +m[2], +m[3]);
+    else { const mo = +(m[4] || m[6]), da = +(m[5] || m[7]); if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) { i = find(year, mo, da); if (i == null && mo > Number(asofDate().slice(5, 7))) i = find(year - 1, mo, da); } }     // 月-日默认当年；比今天晚的月份才算去年
+    spans.push([m.index, m.index + m[0].length]);
+    if (i != null && days.indexOf(i) < 0) days.push(i);
+  }
+  // 价位：不带单位的数字（带 %、亿、万、根、天… 的不是价位），并且落在近一年的价格范围里
+  const from = Math.max(0, S.asof - 250); let lo = Infinity, hi = -Infinity;
+  for (let i = from; i <= S.asof; i++) { lo = Math.min(lo, b.l[i]); hi = Math.max(hi, b.h[i]); }
+  const nums = [], nre = /(?<![\d.\-A-Za-z=])(\d+(?:\.\d+)?)(?![\d.]|\s*(?:%|％|亿|万|根|天|次|倍|日|月|年|张|股|个|步|项|R\b|X\b|周|分))/g;
+  while ((m = nre.exec(text))) {
+    const v = +m[1];
+    if (spans.some(s => m.index >= s[0] && m.index < s[1]) || v < lo * 0.7 || v > hi * 1.3) continue;
+    if (nums.indexOf(v) < 0) nums.push(v);
+  }
+  const eq = (a, v) => Math.abs(a - v) < 0.006, used = new Set(), rings = [], boxes = [], levels = [];
+  const hit = (i, v) => ['h', 'l', 'c', 'o'].some(k => eq(b[k][i], v));
+  days.forEach(i => {                                       // 先配这张卡片提到的日期
+    let any = false;
+    nums.forEach(v => { if (hit(i, v)) { rings.push({ i, p: v }); used.add(v); any = true; } });
+    if (!any) boxes.push(i);
+  });
+  nums.forEach(v => {                                       // 没配上日期的价位：近 120 根里哪根 K 线正好是这个价，就圈哪根；都不是就画横线
+    if (used.has(v)) return;
+    for (let i = S.asof; i >= Math.max(0, S.asof - 120); i--) if (hit(i, v)) { rings.push({ i, p: v }); return; }
+    levels.push(v);
+  });
+  return { rings: rings.slice(0, 16), boxes: boxes.slice(0, 12), levels: levels.slice(0, 6),
+    vol: /成交|换手|放量|缩量|地量|量能|万股|亿股|的量|量在/.test(text), macd: /MACD|背离|DIF|DEA|红柱|绿柱/i.test(text) };
+}
+/* 点一张卡片：k = 0–3 是四要素里的某一项（有固定位置），k 为空是 Claude 自己选的观察点；text 是卡片上的文字。
+   高亮一直留着，再点同一张或换一张才消失。 */
+function flashStep(k, text, key, draw, auto) {
   const st = stateFresh() ? S.state : null; if (!st) return;
-  const pane = k === 0 ? (S.ind.vol ? ind.volPane : null) : k === 1 ? (S.ind.macd ? ind.macdPane : null) : 0;
-  if (pane == null) toast((k === 0 ? '成交量' : 'MACD') + '副图现在是关着的，在“指标”里打开就能看到。');
-  else if (k < 2) flashPane(pane);
-  if (!isDaily()) { if (k >= 2) toast('扇子和成本线只在日线上画，切回日线再点。'); return; }
-  const dr = st.draw, want = k === 0 ? (dr.avwap ? dr.avwap.anchor : null) : k === 1 ? dr.low.i : k === 2 ? (dr.fan ? dr.fan.lo : null) : (dr.avwap ? dr.avwap.anchor : null);
+  if (!auto && key != null && S.flash && S.flash.key === key) { clearFlash(); return; }      // 再点一次：取消
+  // 新格式：Claude 给了画图指令（后端已经把价位从数据里取好），就按指令画；老格式或模板版才从文字里读
+  const marks = draw && draw.length && isDaily() ? resolveMarks(draw) : null;
+  const free = !marks && text && isDaily() ? parseCard(text) : null;
+  if (marks) { if (marks.vol && S.ind.vol) flashPane(ind.volPane); if (marks.macd && S.ind.macd) flashPane(ind.macdPane); }
+  if (k === 0 || (free && free.vol)) { if (S.ind.vol) flashPane(ind.volPane); else if (k === 0) toast('成交量副图现在是关着的，在“指标”里打开就能看到。'); }
+  if (k === 1 || (free && free.macd)) { if (S.ind.macd) flashPane(ind.macdPane); else if (k === 1) toast('MACD 副图现在是关着的，在“指标”里打开就能看到。'); }
+  if (!isDaily()) { if (!auto) toast('图上的标记只在日线上画，切回日线再点。'); return; }
+  const dr = st.draw;
   if (k === 2 && !dr.fan) toast('这一天扇子还画不了。');
   if (k === 3 && !dr.avwap) toast('还没有地量日，成本线没起算，图上没有可看的线。');
-  if (want != null) {                       // 要看的那根 K 线不在视野里，就把图挪过去
-    const r = chart.timeScale().getVisibleLogicalRange();
-    if (r && (want < r.from + 2 || want > r.to - 2)) { const span = Math.max(60, S.asof - want + 30); S.span = span; focusView(span); }
+  const idxs = (free ? free.rings.map(r => r.i).concat(free.boxes) : []).concat(marks ? marks.idxs : []);
+  if (k === 0 && dr.avwap) idxs.push(dr.avwap.anchor);
+  if (k === 1) idxs.push(dr.low.i);
+  if (k === 2 && dr.fan) idxs.push(dr.fan.lo);
+  if (k === 3 && dr.avwap) idxs.push(dr.avwap.anchor);
+  if (!auto && k == null && free && !idxs.length && !free.levels.length && !free.vol && !free.macd) toast('这张卡片没有提到具体的日期或价位，图上没有可以标的位置。');
+  if (!auto && k == null && !free && !(marks && marks.items.length)) toast('这张卡片没有可以画在图上的标记。');
+  if (idxs.length) {                        // 把图对准这一步讲的那一段：太远就拉开，挤在最近几根就拉近。原来的视野记下来，取消时恢复
+    const want = Math.min.apply(null, idxs);
+    if (S.spanHome == null) { noteSpan(); S.spanHome = S.span || 150; }
+    focusView(clamp(S.asof - want + 14, 36, 400));
   }
-  S.flash = { k, until: performance.now() + 1800 };
+  S.flash = { k, free, key, marks, t0: performance.now() };
   S.rev++;
-  setTimeout(() => { S.flash = null; S.rev++; }, 1850);
 }
+function clearFlash() {      // 擦掉图上的标记，视野回到播放前的样子
+  if (S.flash) { S.flash = null; S.rev++; }
+  if (S.spanHome != null && S.bars) { const h = S.spanHome; S.spanHome = null; focusView(h); }
+}
+/* 把后端给的标记（日期 + 已经从数据里取好的价位）换成图上的 K 线序号。日期不在当前数据里的丢掉。 */
+function resolveMarks(draw) {
+  const items = [], idxs = []; let vol = false, macd = false;
+  const at = d => { const i = S.idx[d]; return i != null && i <= S.asof ? i : null; };
+  draw.forEach(m => {
+    if (m.type === 'point') { const i = at(m.date); if (i != null) { items.push({ type: 'point', i, p: m.price, label: m.label }); idxs.push(i); } }
+    else if (m.type === 'path') { const pts = (m.points || []).map(q => ({ i: at(q.date), p: q.price })).filter(q => q.i != null); if (pts.length >= 2) { items.push({ type: 'path', pts, label: m.label }); pts.forEach(q => idxs.push(q.i)); } }
+    else if (m.type === 'level') items.push({ type: 'level', p: m.price, label: m.label });
+    else if (m.type === 'zone') { const a = at(m.date_from), b = at(m.date_to); if (a != null && b != null) { items.push({ type: 'zone', a, b, top: m.top, bottom: m.bottom, label: m.label }); idxs.push(a, b); } }
+    else if (m.type === 'volume' || m.type === 'macd') {
+      const is = (m.dates || []).map(at).filter(i => i != null); if (!is.length) return;
+      items.push({ type: m.type, is, label: m.label }); is.forEach(i => idxs.push(i)); if (m.type === 'volume') vol = true; else macd = true;
+    }
+  });
+  return { items, idxs, vol, macd };
+}
+const MARK_MS = 520;        // 每个标记画出来用的时间；一个接一个
+/* 一笔一笔画：第 n 个标记在 n×MARK_MS 之后开始出现。返回 0–1 的进度。 */
+function markProgress(n) { const t = (performance.now() - S.flash.t0) / MARK_MS - n; return t <= 0 ? 0 : t >= 1 ? 1 : 1 - Math.pow(1 - t, 3); }
+function drawMarks2() {
+  const mk = S.flash && S.flash.marks; if (!mk) return;
+  const Yc = C.hazard;
+  mk.items.forEach((m, n) => {
+    const g = markProgress(n); if (g <= 0) return;
+    ctx.save(); ctx.globalAlpha = Math.min(1, g * 1.4);
+    if (m.type === 'zone') {
+      const x0 = X(m.a), x1 = X(m.b), y0 = Y(m.top), y1 = Y(m.bottom);
+      if ([x0, x1, y0, y1].every(v => v != null)) {
+        const w = (x1 - x0 + 12) * g;
+        ctx.fillStyle = 'rgba(247,198,0,0.16)'; ctx.fillRect(x0 - 6, y0, w, y1 - y0);
+        ctx.strokeStyle = Yc; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]); ctx.strokeRect(x0 - 6, y0, w, y1 - y0); ctx.setLineDash([]);
+        if (g > 0.6) label((m.label ? m.label + ' ' : '') + fmtP(m.bottom) + '–' + fmtP(m.top), x0 - 4, y0 - 10, Yc);
+      }
+    } else if (m.type === 'level') {
+      const y = Y(m.p);
+      if (y != null) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(OV.w * g, y); ctx.strokeStyle = Yc; ctx.lineWidth = 1.6; ctx.setLineDash([8, 4]); ctx.stroke(); ctx.setLineDash([]);
+        if (g > 0.6) label((m.label ? m.label + ' ' : '') + fmtP(m.p), OV.w - 6, y - 10, Yc, 'right');
+      }
+    } else if (m.type === 'path') {
+      const P = m.pts.map(q => [X(q.i), Y(q.p)]); if (P.some(q => q[0] == null || q[1] == null)) { ctx.restore(); return; }
+      let total = 0; const seg = []; for (let k = 1; k < P.length; k++) { const d = Math.hypot(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1]); seg.push(d); total += d; }
+      let left = total * g, end = P[0];
+      ctx.beginPath(); ctx.moveTo(P[0][0], P[0][1]);
+      for (let k = 1; k < P.length && left > 0; k++) {
+        const f = Math.min(1, left / (seg[k - 1] || 1)); end = [P[k - 1][0] + (P[k][0] - P[k - 1][0]) * f, P[k - 1][1] + (P[k][1] - P[k - 1][1]) * f];
+        ctx.lineTo(end[0], end[1]); left -= seg[k - 1];
+      }
+      ctx.strokeStyle = Yc; ctx.lineWidth = 2.6; ctx.shadowColor = Yc; ctx.shadowBlur = 8; ctx.stroke(); ctx.shadowBlur = 0;
+      const shownN = Math.max(1, Math.round(1 + (P.length - 1) * g));
+      P.slice(0, shownN).forEach((q, k) => { ctx.beginPath(); ctx.arc(q[0], q[1], 5, 0, Math.PI * 2); ctx.fillStyle = Yc; ctx.fill(); label(fmtP(m.pts[k].p), q[0], q[1] + (m.pts[0].p >= m.pts[m.pts.length - 1].p ? -14 : 14), Yc, 'center'); });
+      if (g >= 1) {                         // 箭头和这条线的名字
+        const a = P[P.length - 2], b = P[P.length - 1], ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        ctx.beginPath(); ctx.moveTo(b[0] + 12 * Math.cos(ang), b[1] + 12 * Math.sin(ang));
+        ctx.lineTo(b[0] - 7 * Math.cos(ang - 1.2), b[1] - 7 * Math.sin(ang - 1.2)); ctx.lineTo(b[0] - 7 * Math.cos(ang + 1.2), b[1] - 7 * Math.sin(ang + 1.2)); ctx.closePath(); ctx.fillStyle = Yc; ctx.fill();
+        if (m.label) label(m.label, b[0] + 16, b[1], Yc);
+      }
+    } else if (m.type === 'point') {
+      const x = X(m.i), y = Y(m.p);
+      if (x != null && y != null) {
+        ctx.beginPath(); ctx.arc(x, y, 22 - 12 * g, 0, Math.PI * 2); ctx.strokeStyle = Yc; ctx.lineWidth = 2.6; ctx.shadowColor = Yc; ctx.shadowBlur = 10; ctx.stroke(); ctx.shadowBlur = 0;
+        if (g > 0.6) label((m.label ? m.label + ' ' : '') + fmtP(m.p), x + 14, y, Yc);
+      }
+    } else {                                // volume / macd：在主图上从那根 K 线往下拉一条引线，数值取自数据
+      m.is.forEach(i => {
+        const x = X(i), y0 = Y(S.bars.l[i]); if (x == null || y0 == null) return;
+        ctx.beginPath(); ctx.moveTo(x, y0 + 4); ctx.lineTo(x, y0 + 4 + (OV.h - y0 - 4) * g); ctx.strokeStyle = Yc; ctx.lineWidth = 1.4; ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([]);
+        if (g > 0.6) label(m.type === 'volume' ? '量 ' + fmtVol(S.bars.v[i]) : 'MACD ' + S.bars.hist[i].toFixed(2), x, OV.h - 12, Yc, 'center');
+      });
+      if (g > 0.6 && m.label) { const x = X(m.is[m.is.length - 1]); if (x != null) label(m.label, x + 30, OV.h - 30, Yc); }
+    }
+    ctx.restore();
+  });
+}
+const flashAnimating = () => !!(S.flash && S.flash.marks && performance.now() - S.flash.t0 < MARK_MS * (S.flash.marks.items.length + 1));
 function flashPane(p) {
   const pn = chart.panes()[p], h = pn && pn.getHTMLElement ? pn.getHTMLElement() : null; if (!h) return;
   const wrap = $('#chartwrap').getBoundingClientRect(), r = h.getBoundingClientRect(), d = document.createElement('div');
@@ -852,6 +982,28 @@ function drawFlash() {
     if ([x0, y0, x1, y1].every(v => v != null) && x1 > x0) { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(OV.w, y0 + (y1 - y0) * (OV.w - x0) / (x1 - x0)); ctx.strokeStyle = C.hazard; ctx.lineWidth = 4; ctx.stroke(); }
   }
   if (fl.k === 3 && dr.avwap) drawPolyline(dr.avwap.anchor, dr.avwap.values, C.hazard, 4);
+  ctx.restore();
+  drawMarks2();
+  const f = fl.free; if (!f) return;
+  ctx.save();
+  f.levels.forEach(v => {                   // 价位横线
+    const y = Y(v); if (y == null) return;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(OV.w, y); ctx.strokeStyle = C.hazard; ctx.lineWidth = 1.5; ctx.setLineDash([7, 4]); ctx.stroke(); ctx.setLineDash([]);
+    label(fmtP(v), OV.w - 6, y - 10, C.hazard, 'right');
+  });
+  const bw = Math.max(9, Math.abs((X(1) || 0) - (X(0) || 0)) * 0.9 + 6);
+  f.boxes.forEach(i => {                    // 只提到日期：把整根 K 线框出来
+    const x = X(i), y1 = Y(S.bars.h[i]), y2 = Y(S.bars.l[i]); if (x == null || y1 == null || y2 == null) return;
+    ctx.strokeStyle = C.hazard; ctx.lineWidth = 2; ctx.strokeRect(x - bw / 2, y1 - 5, bw, y2 - y1 + 10);
+    label(S.bars.d[i].slice(5), x, y1 - 16, C.hazard, 'center');
+  });
+  ctx.shadowColor = C.hazard; ctx.shadowBlur = 8;
+  f.rings.forEach(r => {                    // 日期和价位都对得上：圈在那根 K 线的那个价格上
+    const x = X(r.i), y = Y(r.p); if (x == null || y == null) return;
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.strokeStyle = C.hazard; ctx.lineWidth = 2.5; ctx.stroke();
+  });
+  ctx.shadowBlur = 0;
+  f.rings.forEach(r => { const x = X(r.i), y = Y(r.p); if (x != null && y != null) label(S.bars.d[r.i].slice(5) + ' ' + fmtP(r.p), x + 12, y, C.hazard); });
   ctx.restore();
 }
 
@@ -920,6 +1072,7 @@ function bind() {
   window.FENarrate.init({
     api, toast, ticker: () => S.ticker, asof: () => asofDate(), ready: () => !!stateFresh(), flash: flashStep,
     fake: () => new URLSearchParams(location.search).get('aifake') === '1' || store.get('aifake', false),   // 测试开关：往 Claude 输出里塞假数字
+    clearFlash,
     onReveal: n => { S.reveal = n; renderEvidence(); },      // 四问出到第几问，证据条就亮到第几条
   });
   $('#refreshBtn').onclick = refreshData;
@@ -955,7 +1108,9 @@ async function boot() {
   if (q.get('narr')) {                    // ?narr=1：打开页面就播放解说（截图用）
     const skip = q.get('narr') === 'skip'; if (skip) document.body.classList.add('noanim');
     const fin = () => { if (window.FENarrate.current()) window.FENarrate.finish(); else setTimeout(fin, 100); };
-    const go = () => { if (stateFresh()) { window.FENarrate.run(); if (skip) fin(); } else setTimeout(go, 100); }; go();
+    const pickN = q.get('pick');            // ?narr=skip&pick=2：再点开第 2 张卡片（截图用）
+    const pk = () => { const li = document.querySelectorAll('#narr .n-step.show')[Number(pickN) - 1]; if (li) li.click(); else setTimeout(pk, 150); };
+    const go = () => { if (stateFresh()) { window.FENarrate.run(); if (skip) fin(); if (pickN) setTimeout(pk, 400); } else setTimeout(go, 100); }; go();
   }
   if (q.get('livedemo') && S.bars) {      // ?livedemo=1：休市时预览盘中 K 线的样子（模拟数据，图例里写明“演示”）
     const d1 = new Date(S.bars.d[lastIdx()] + 'T12:00:00Z'); d1.setUTCDate(d1.getUTCDate() + 3);

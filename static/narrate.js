@@ -22,7 +22,7 @@ window.FENarrate = (() => {
     $('#narr').hidden = true; $('#narr').textContent = ''; $('#narrNotice').hidden = true; $('#narrWatch').hidden = true;
     $('#narrMeta').textContent = ''; $('#aiPolish').hidden = true; $('#aiSkip').hidden = true;
     $('#aiRun').textContent = '✦ AI 分析';
-    if (ctx) ctx.onReveal(null);
+    if (ctx) { ctx.onReveal(null); ctx.clearFlash(); }
     sync();
   }
 
@@ -65,7 +65,7 @@ window.FENarrate = (() => {
   }
 
   function show(res, animate) {
-    clearTimeout(timer); cur = res; shown = 0;
+    clearTimeout(timer); cur = res; shown = 0; ctx.clearFlash();
     const n = res.narration, box = $('#narr');
     box.textContent = ''; box.hidden = false;
     box.appendChild(el('div', 'n-hook', n.hook));
@@ -89,10 +89,14 @@ window.FENarrate = (() => {
     n.steps.forEach((s, k) => {
       const ev = s.evidence >= 1 && s.evidence <= 4 ? s.evidence : 0;
       const li = el('li', 'n-step' + (s.ok ? ' on' : '') + (ev ? '' : ' free')); li.dataset.k = k; li.dataset.ev = ev;
-      li.title = ev ? '点一下，在图上看这一项证据对应的位置' : 'Claude 自己选的观察点，不对应四要素里的某一项';
+      // 模板版的 look 是一行事实，照常显示；Claude 版不显示成段的数字（证据画在图上），老格式里的那段话只放进悬停提示
+      const wordy = res.source === 'claude';
+      li.title = '点一下，在图上把这一步的证据画出来；再点一次取消' + (wordy && s.look ? '\n\n' + s.look : '');
       li.appendChild(el('i', 'tri', ev ? String(ev) : '·'));
       const mid = el('div', 'mid');
-      mid.appendChild(el('em', 'q', s.q)); mid.appendChild(mark(el('b', 'say'), s.say)); mid.appendChild(mark(el('span', 'look'), s.look));
+      const lk = mark(el('span', 'look'), s.look || ''); lk.hidden = wordy || !s.look;
+      mid.appendChild(el('em', 'q', s.q)); mid.appendChild(mark(el('b', 'say'), s.say)); mid.appendChild(lk);
+      if ((s.draw || []).length) mid.appendChild(el('span', 'has-draw', '▶ 图上 ' + s.draw.length + ' 处标记'));
       li.appendChild(mid);
       const tone = s.tone || (/证据|站回来|报警/.test(s.sticker) ? 'good' : s.sticker === '不适用' ? 'neutral' : 'bad');
       if (s.sticker) li.appendChild(el('span', 'sticker' + (tone === 'good' ? ' good' : tone === 'neutral' ? ' na' : ''), s.sticker));
@@ -120,24 +124,35 @@ window.FENarrate = (() => {
     const items = document.querySelectorAll('#narr .n-step');
     if (shown < items.length) {
       items[shown].classList.add('show'); shown++; ctx.onReveal(revealed());
-      timer = setTimeout(step, STEP_MS);
-    } else finish();
+      highlight(shown - 1, true);          // 卡片一出来，图上同步把这一步的证据画出来
+      const n = ((cur.narration.steps[shown - 1] || {}).draw || []).length;
+      timer = setTimeout(step, n ? Math.max(STEP_MS, n * 520 + 1100) : STEP_MS);      // 等这一步画完再出下一张
+    } else finish(true);
   }
-  function finish() {
+  function finish(keep) {
     clearTimeout(timer);
     const all = document.querySelectorAll('#narr .n-step');
-    all.forEach(li => li.classList.add('show')); shown = all.length;
+    all.forEach(li => { li.classList.add('show'); if (keep !== true) li.classList.remove('picked'); }); shown = all.length;
+    if (keep !== true && ctx) ctx.clearFlash();
     const f = $('#narr .n-final'); if (f) f.classList.add('show');
     $('#narrWatch').hidden = !(cur && cur.narration.watch.length);
     $('#aiSkip').hidden = true;
     if (ctx) ctx.onReveal(null);
     sync();
   }
-  function pick(k) {
-    let ev = 0;
-    document.querySelectorAll('#narr .n-step').forEach(li => { const me = Number(li.dataset.k) === k; li.classList.toggle('picked', me); if (me) ev = Number(li.dataset.ev); });
-    if (ev) ctx.flash(ev - 1);         // 只有对应四要素某一项的卡片，图上才有固定的位置可以高亮
+  function pick(k) { highlight(k, false); }
+  /* 在图上画出第 k 步的证据。auto = 解说播放到这一步时自动画；手动点同一张第二次是取消。
+     四要素里的某一项有固定位置；Claude 给了画图指令就按指令一笔一笔画；老格式没有指令的，从那段文字里读日期和价位。 */
+  function highlight(k, auto) {
+    let ev = 0, text = '', on = false;
+    document.querySelectorAll('#narr .n-step').forEach(li => {
+      const me = Number(li.dataset.k) === k;
+      if (me) { on = auto || !li.classList.contains('picked'); ev = Number(li.dataset.ev); text = li.querySelector('.say').textContent + ' ' + li.querySelector('.look').textContent; }
+      li.classList.toggle('picked', me && on);
+    });
+    const s = cur && cur.narration.steps[k];
+    ctx.flash(ev ? ev - 1 : null, text, 'step' + k, (s && s.draw) || [], auto);
   }
 
-  return { init, reset, sync, run, polish, current: () => cur, shown: () => shown, finish };
+  return { init, reset, sync, run, polish, show, current: () => cur, shown: () => shown, finish };
 })();

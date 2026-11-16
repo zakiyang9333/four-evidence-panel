@@ -181,12 +181,14 @@ def ai_analyze(body):
         got = ai_explain.polish(facts, bars, bt, CFG, pos)
         if not got.get('ok'):
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='没能用上 Claude，已改用模板：' + got['error'], code=got.get('code'))
-        narr, why = narrate.normalize(got['raw'], facts, tmpl)
+        allowed = narrate.allowed_numbers(facts, bars, bt, pos)
+        # Claude 只说在图上标哪一天、哪个位置；价位由这里从 K 线数据里取。直接给的价位必须是输入里有的数。
+        narr, why = narrate.normalize(got['raw'], facts, tmpl, narrate.chart_data(t, facts['asof']), {round(a, 2) for a in allowed})
         if narr is None:
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice=f'AI 输出的结构不对（{why}），已改用模板', code='shape')
         if body.get('test_fake_number'):                # 测试开关：往 Claude 的输出里塞一个假数字，看核对能不能拦住
-            narr['steps'][0]['look'] += '，目标看到 987.65'
-        bad = narrate.bad_numbers(narr, narrate.allowed_numbers(facts, bars, bt, pos))
+            narr['steps'][0]['say'] += '，目标看到 987.65'
+        bad = narrate.bad_numbers(narr, allowed)
         if bad and CFG.get('ai_strict_numbers', False):     # 严格模式：有一个对不上就整段不用
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='AI 输出含无法核对的数字，已改用模板', code='numbers', unverified=bad[:8])
         res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], positions_sent=len(pos['positions']) if pos else 0,

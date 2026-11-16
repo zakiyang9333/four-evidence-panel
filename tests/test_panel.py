@@ -308,7 +308,13 @@ class NoKey(unittest.TestCase):
 
 
 GOOD_REPLY = dict(hook='停，先别急着抄', story='冲高之后一路回落，中间夹着几次反弹',
-                  steps=[dict(q='缺口没补', look='前面留了一个向下的缺口', say='缺口还压在头上', sticker='有压力', tone='bad', evidence=0),
+                  steps=[dict(q='缺口没补', look='前面留了一个向下的缺口', say='缺口还压在头上', sticker='有压力', tone='bad', evidence=0,
+                              draw=[dict(type='point', dates=['05-12'], at='low', price=0, top=0, bottom=0, label='坑'),
+                                    dict(type='path', dates=['2025-05-08', '05-09', '05-12'], at='high', price=0, top=0, bottom=0, label='抬高'),
+                                    dict(type='level', dates=[], at='close', price=123456.78, top=0, bottom=0, label='编的价位'),
+                                    dict(type='point', dates=['2031-01-01', '05-14'], at='high', price=0, top=0, bottom=0, label='不存在的日子'),
+                                    dict(type='zone', dates=['05-01', '05-08'], at='close', price=0, top=0, bottom=0, label='平台'),
+                                    dict(type='volume', dates=['05-12'], at='close', price=0, top=0, bottom=0, label='放量')]),
                          dict(q='成本线', look='收盘在成本线上面', say='可这里说没站回', sticker='没站回', tone='bad', evidence=4),
                          dict(q='量', look='量缩到了窗口里最小', say='地量到了', sticker='缩量了', tone='good', evidence=1)],
                   final='还不抄', watch=['等下一根收盘再看'])
@@ -368,6 +374,17 @@ class WithKey(unittest.TestCase):
         self.assertEqual([s['q'] for s in n['steps']], ['缺口没补', '成本线', '量'])
         self.assertEqual((n['steps'][0]['evidence'], n['steps'][0]['ok'], n['steps'][0]['sticker']), (0, None, '有压力'))   # 和四要素无关的一步
         self.assertEqual((n['steps'][2]['ok'], n['steps'][2]['sticker']), (True, '缩量了'))
+        # 画图指令：Claude 只说标哪一天的哪个位置，价位是后端从 K 线数据里取的；编的价位、不存在或回放日之后的日子都被丢掉
+        B = E.load(panel.csv_path('NVDA')); at = lambda d, k: round(float(B[k][B['d'].index(d)]), 2)
+        dr = n['steps'][0]['draw']
+        self.assertEqual([m['type'] for m in dr], ['point', 'path', 'zone', 'volume'])
+        self.assertEqual(dr[0], dict(type='point', date='2025-05-12', price=at('2025-05-12', 'l'), label='坑'))
+        self.assertEqual(dr[1]['points'], [dict(date=d, price=at(d, 'h')) for d in ('2025-05-08', '2025-05-09', '2025-05-12')])
+        a, b = B['d'].index('2025-05-01'), B['d'].index('2025-05-08')
+        self.assertEqual((dr[2]['date_from'], dr[2]['date_to'], dr[2]['top'], dr[2]['bottom']),
+                         ('2025-05-01', '2025-05-08', round(float(B['h'][a:b + 1].max()), 2), round(float(B['l'][a:b + 1].min()), 2)))
+        self.assertEqual(dr[3], dict(type='volume', dates=['2025-05-12'], label='放量'))
+        self.assertEqual(n['steps'][1]['draw'], [])
         # 引擎说了算的只有两处：这一天是 4/4，所以“成本线没站回”的贴纸被换掉，大字结论“还不抄”被换掉
         self.assertEqual((n['steps'][1]['ok'], n['steps'][1]['sticker'], n['steps'][1]['tone']), (True, '站回来了', 'good'))
         self.assertEqual(n['final'], '4/4，四样齐了'); self.assertEqual(res['card']['verdict'], '可以入场（仅观察）')

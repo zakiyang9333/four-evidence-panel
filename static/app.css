@@ -209,6 +209,8 @@ td.chk.none{color:var(--mut)}
   box-shadow:2px 2px 0 #0008;border:1.5px solid #141414}
 .sticker.good{background:#141414;color:var(--hazard);border-color:var(--hazard)}
 .sticker.na{background:#3a4152;color:#aab1c2;border-color:#3a4152;box-shadow:none}
+.n-step .has-draw{font-size:10.5px;color:var(--hazard);opacity:.75;margin-top:3px}
+.n-step.picked{background:#2a2408}.n-step.picked .has-draw{opacity:1}
 .n-step.free .tri{clip-path:none;border-radius:50%;width:22px;height:22px;margin:0 4px;align-items:center;padding:0;background:#2b3446}
 .unv{background:#5a4212;color:#fde68a;border-radius:3px;padding:0 2px;border-bottom:1px dashed var(--warn);cursor:help}
 .n-final{display:none;margin-top:12px;font-size:26px;font-weight:900;text-align:center;color:var(--hazard);letter-spacing:1px}

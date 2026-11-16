@@ -108,6 +108,40 @@
     ok('narr_watch_and_meta', $('#narrWatch').hidden === (nar.narration.watch.length === 0) && /模板版/.test($('#narrMeta').textContent) && $('#narrNotice').hidden);
     steps[2].click(); const fl2 = S.flash && S.flash.k; steps[0].click(); await sleep(60);
     ok('narr_click_highlights_chart', fl2 === 2 && S.flash && S.flash.k === 0 && !!document.querySelector('.pane-flash') && steps[0].classList.contains('picked'), [fl2, S.flash]);
+    steps[0].click();
+    ok('narr_click_again_clears', !S.flash && !steps[0].classList.contains('picked'));
+    // 自由分析的卡片（不对应四要素）：按文字里提到的日期和价位在图上标出来
+    const bb = S.bars, i1 = S.asof - 6, i2 = S.asof - 15, lvl = Math.round((bb.h[S.asof] + 7.77) * 100) / 100;
+    N.show({ ok: true, source: 'claude', ticker: S.ticker, asof: bb.d[S.asof], model: 'selftest', polish: nar.polish, narration: { hook: '自检', story: '自检',
+      steps: [{ q: '自己选的角度', say: '这里有个坑', look: bb.d[i1].slice(5) + ' 最低 ' + bb.l[i1] + '，' + bb.d[i2].slice(5) + ' 那天放量 3.5 亿股，上方压力 ' + lvl + '，涨了 16%', sticker: '有承接', tone: 'good', evidence: 0, ok: null },
+        { q: '没有数字的一步', say: '就是感觉', look: '整体偏弱', sticker: '', tone: 'neutral', evidence: 0, ok: null },
+        { q: '新格式', say: '高点在下台阶', sticker: '下台阶', tone: 'bad', evidence: 0, ok: null, draw: [
+          { type: 'path', points: [{ date: bb.d[i2], price: bb.h[i2] }, { date: bb.d[i1], price: bb.h[i1] }], label: '下台阶' },
+          { type: 'point', date: bb.d[i1], price: bb.l[i1], label: '坑' },
+          { type: 'level', price: lvl, label: '压力' },
+          { type: 'zone', date_from: bb.d[i2], date_to: bb.d[i1], top: bb.h[i2], bottom: bb.l[i1], label: '平台' },
+          { type: 'volume', dates: [bb.d[i2]], label: '放量' },
+          { type: 'point', date: '2099-01-01', price: 1, label: '不存在' }] }], final: '还不抄', watch: [] } }, false);
+    await frame();
+    const fs = [...document.querySelectorAll('#narr .n-step.show')]; fs[0].click(); await frame();
+    const ff = S.flash && S.flash.free;
+    out.info.free = ff && { rings: ff.rings, boxes: ff.boxes, levels: ff.levels, vol: ff.vol };
+    ok('free_card_marks_dates_and_prices', ff && ff.rings.length === 1 && ff.rings[0].i === i1 && ff.rings[0].p === bb.l[i1] && ff.boxes.join() === String(i2) && ff.levels.join() === String(lvl) && ff.vol === true, out.info.free);
+    ok('free_card_drawn_on_chart', alphaAt(i1, bb.l[i1] ) > 0 && alphaAt(S.asof - 20, lvl) > 0 && fs[0].classList.contains('picked') && fs[0].classList.contains('free'), [alphaAt(i1, bb.l[i1]), alphaAt(S.asof - 20, lvl)]);
+    fs[1].click(); await frame();
+    ok('free_card_without_numbers_says_so', S.flash && S.flash.free.rings.length === 0 && /没有提到具体的日期或价位/.test($('#toast').textContent));
+    // 新格式：卡片上没有成段的数字，证据按画图指令一笔一笔画在图上
+    ok('claude_card_has_no_wall_of_numbers', fs.every(li => li.querySelector('.look').hidden) && /图上 6 处标记/.test(fs[2].textContent), fs[2].textContent);
+    fs[2].click(); await frame();
+    const mk = S.flash && S.flash.marks;
+    out.info.marks = mk && { types: mk.items.map(x => x.type), early: alphaAt(i1, bb.l[i1]) };
+    ok('draw_instructions_resolved', mk && mk.items.map(x => x.type).join() === 'path,point,level,zone,volume' && mk.vol === true && !S.flash.free, out.info.marks);
+    ok('draw_is_animated', alphaAt(S.asof - 20, lvl) === 0, alphaAt(S.asof - 20, lvl));        // 第三个标记（价位线）刚点下去时还没开始画
+    await sleep(4000); await frame();
+    ok('draw_finished_on_chart', alphaAt(i1, bb.l[i1]) > 0 && alphaAt(S.asof - 20, lvl) > 0 && alphaAt(i2, bb.h[i2]) > 0, [alphaAt(i1, bb.l[i1]), alphaAt(S.asof - 20, lvl), alphaAt(i2, bb.h[i2])]);
+    N.reset(); await frame();
+    ok('narr_reset_clears_highlight', !S.flash && $('#narr').hidden);
+    $('#aiRun').click(); await until(() => $('#narr .n-final.show'), 9000);
     out.info.ai = { enabled: S.meta.ai.enabled, polishDisabled: $('#aiPolish').disabled, hidden: $('#aiPolish').hidden, hint: $('#aiHint').textContent };
     ok('polish_button_matches_key', !$('#aiPolish').hidden && (S.meta.ai.enabled ? !$('#aiPolish').disabled : ($('#aiPolish').disabled && /ANTHROPIC_API_KEY/.test($('#aiHint').textContent))), out.info.ai);
     $('#aiRun').click(); await until(() => N.shown() >= 1 && !$('#aiSkip').hidden, 5000); $('#aiSkip').click();
