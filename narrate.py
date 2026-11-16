@@ -262,7 +262,7 @@ def resolve_draw(items, D, forms):
     return out
 
 
-def normalize(raw, f, tmpl, D=None, forms=None):
+def normalize(raw, f, tmpl, D=None, forms=None, positive=None, link_evidence=True):
     """Claude's JSON -> cards. Claude chooses what to look at, how many steps and in what order (zaki 11-16: 市场变化多，
     内容要完全自由，只保留模板版那种呈现方式)。What stays with the engine: a step that says it is about evidence 1–4 gets that
     evidence's true/false from the engine, and a sticker that contradicts it is replaced. Returns (narration, None) or (None, reason)."""
@@ -281,7 +281,7 @@ def normalize(raw, f, tmpl, D=None, forms=None):
         look = look if isinstance(look, str) else ''             # 新格式不要 look：数字画在图上，不写成一段话
         if not (isinstance(say, str) and say.strip()):
             return None, f'第 {k + 1} 步缺少 say'
-        ev = s.get('evidence') if s.get('evidence') in (1, 2, 3, 4) else 0
+        ev = s.get('evidence') if link_evidence and s.get('evidence') in (1, 2, 3, 4) else 0      # 后手模型没有四项证据可对
         sticker = s.get('sticker').strip()[:8] if isinstance(s.get('sticker'), str) and s.get('sticker').strip() else ''
         tone = s.get('tone') if s.get('tone') in ('good', 'bad', 'neutral') else ('good' if sticker in GOOD else 'bad' if sticker in BAD else 'neutral')
         ok = None
@@ -295,7 +295,8 @@ def normalize(raw, f, tmpl, D=None, forms=None):
                                  draw=resolve_draw(s.get('draw'), D, forms or set()) if D else []))
     # 大字结论不能和引擎唱反调
     fin = out['final']
-    if (f['all4'] and re.search(r'不抄|未触发|不可|别', fin)) or (not f['all4'] and not re.search(r'不抄|未触发|还不|不可|别|不够|再等|等', fin)) or len(fin) > 16:
+    pos = f['all4'] if positive is None else positive          # 所选规则模型的清单是不是全中（四证 4/4，或后手 3/3）
+    if (pos and re.search(r'不抄|未触发|不可|别', fin)) or (not pos and not re.search(r'不抄|未触发|还不|不可|别|不够|再等|等', fin)) or len(fin) > 16:
         out['final'] = tmpl['final']
     watch = raw.get('watch')
     out['watch'] = [w.strip() for w in watch if isinstance(w, str) and w.strip()][:6] if isinstance(watch, list) else []

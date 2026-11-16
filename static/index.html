@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<div id="banner" role="note">未验证，仅观察。回测证据不足，不是买入建议。</div>
+<div id="banner" role="note">四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据</div>
 
 <header id="topbar">
   <div class="brand"><span class="logo">◆</span>四要素观察面板</div>
@@ -66,9 +66,12 @@
       <div id="legVol" class="leg sub" hidden></div>
       <div id="legMacd" class="leg sub" hidden></div>
       <div id="evidence"></div>
+      <div id="qBar" hidden></div>
+      <div id="qMenu" hidden></div>
       <div id="hint" hidden></div>
       <form id="textBox" hidden><input id="textInput" maxlength="40" placeholder="标注文字，回车确定" autocomplete="off"></form>
     </div>
+    <div id="qLegend" hidden></div>
     <div id="replaybar" hidden>
       <b>回放</b>
       <button id="rpPrev" title="前一根（←）">◀</button>
@@ -87,7 +90,25 @@
       <button id="sideClose" title="收起">✕</button>
     </div>
     <div class="side-body">
-      <div class="sec-title">✦ AI 解说 <span class="muted small" id="narrMeta"></span></div>
+      <div class="card qa" id="qaCard">
+        <div class="qa-head"><span class="qa-ico">✦</span><div><b>AI 分析</b><small>日线 · 收盘确认 · 历史数据重放</small></div></div>
+        <div class="qa-row">
+          <label class="pill">模型 <select id="qModel" aria-label="规则模型"></select></label>
+          <span class="pill">周期 <b>日线</b></span>
+        </div>
+        <div class="qa-row">
+          <span class="pill" id="qPos" title="从 portfolio_state.json 读，只读">持仓 <b>—</b></span>
+          <span class="seg mini" aria-label="方向"><button class="on" id="qLong">↗ 做多</button><button id="qShort" disabled title="没有做空规则">↘ 做空</button></span>
+        </div>
+        <button id="qRun" class="primary big" disabled>AI 分析当前图表</button>
+        <div class="muted small" id="qHint">结构 → 规则信号 → 划线 → AI 深度解读，步骤见下方。</div>
+      </div>
+      <div class="card thin" id="qSteps" hidden></div>
+
+      <div class="sec-title">当前图表 <span class="qtag" id="qLabel"></span></div>
+      <div class="card" id="qScore"><div class="muted small">计算中…</div></div>
+
+      <div class="sec-title">✦ AI 深度解读 <span class="qtag" id="narrSrc" hidden></span><span class="muted small" id="narrMeta"></span></div>
       <div class="card narr" id="narrCard">
         <div class="narr-actions">
           <button id="aiRun" class="primary" disabled title="按视频的四问走一遍：量 → MACD → 扇子 → 成本线。模板版，不调用 API，不花钱">✦ AI 分析</button>
@@ -102,6 +123,7 @@
       <div class="sec-title">◎ 规则模型信号</div>
       <div id="sigCard" class="card"></div>
       <div id="tiles" class="tiles"></div>
+      <div id="qExtra"></div>
       <div id="narrWatch" class="card thin" hidden></div>
       <details id="basis" class="card thin"><summary>依据（引擎逐项输出）</summary><div id="basisBody"></div></details>
       <div id="notes"></div>
@@ -124,6 +146,7 @@
 <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/static/portfolio.js"></script>
 <script src="/static/narrate.js"></script>
+<script src="/static/quant.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

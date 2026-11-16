@@ -316,7 +316,7 @@ function tick(force) {
   const resized = syncOverlay() || force === true;
   if (S.needFocus && OV.w > 80) { S.needFocus = false; focusView(S.span || 150); }
   const a = X(0), b = X(100), y1 = Y(1), y2 = Y(2);
-  const sig = [a, b, y1, y2, S.rev, flashAnimating() ? performance.now() : 0].join('|');     // 标记正在一笔一笔画的时候，每帧都重画
+  const sig = [a, b, y1, y2, S.rev, flashAnimating() || window.FEQuant.animating() ? performance.now() : 0].join('|');     // 标记正在一笔一笔画的时候，每帧都重画
   if (resized || sig !== lastSig) { lastSig = sig; draw(); placeLegends(); }
 }
 
@@ -492,12 +492,14 @@ function draw() {
   labelRects = [];
   if (!S.bars) return;
   ctx.save(); ctx.beginPath(); ctx.rect(0, 0, OV.w, OV.h); ctx.clip();
-  if (stateFresh() && isDaily()) { if (S.auto) drawAuto(); }     // 扇子、成本线、标记都是按日线 K 线的位置画的
+  const four = !window.FEQuant.hideFour();      // 选了后手模型时，四证的自动画和 1–4 标记先收起来
+  if (stateFresh() && isDaily()) { if (S.auto && four) drawAuto(); }     // 扇子、成本线、标记都是按日线 K 线的位置画的
+  window.FEQuant.draw();                          // 「AI 量化」面板的结构线和后手模型的叠加
   drawPortfolioLines();
   drawManual();
   drawPending();
   drawFlash();
-  if (stateFresh() && isDaily() && S.ind.marks) drawMarks();
+  if (stateFresh() && isDaily() && S.ind.marks && four) drawMarks();
   ctx.restore();
 }
 
@@ -598,6 +600,7 @@ async function fetchState() {
     if (nar && (nar.ticker !== S.ticker || nar.asof !== st.asof)) window.FENarrate.reset();     // 解说对应的不是这一天了
     renderEvidence(); renderSide(); syncPriceLines();
     window.FENarrate.restore();      // 这一天保存过 Claude 的解说就直接显示，不用再点、不再计费
+    window.FEQuant.onState();        // 表盘、规则模型信号、结构线：按这一天重算
     candle.applyOptions({ autoscaleInfoProvider: scaleProvider });
     S.rev++;
   } catch (e) { if (seq === S.seq) toast('取状态失败：' + e.message, true); }
@@ -605,7 +608,7 @@ async function fetchState() {
 
 function syncPriceLines() {
   S.plines.forEach(l => candle.removePriceLine(l)); S.plines = [];
-  if (!S.auto || !stateFresh() || !isDaily()) return;
+  if (!S.auto || !stateFresh() || !isDaily() || window.FEQuant.hideFour()) return;
   const lv = S.state.levels, add = (price, color, title) => {
     if (price == null) return;
     S.plines.push(candle.createPriceLine({ price, color, lineVisible: false, axisLabelVisible: true, title }));
@@ -620,7 +623,7 @@ async function setTicker(t, date) {
   if (b.ok === false) return toast(b.error, true);
   S.bars = b; S.idx = {}; b.d.forEach((d, i) => { S.idx[d] = i; });
   S.state = null; S.avwap = {}; S.hover = null; S.flash = null; S.spanHome = null;
-  window.FENarrate.reset();
+  window.FENarrate.reset(); window.FEQuant.reset();
   if (S.live && S.live.ticker !== t) S.live = null;
   setTimeout(pollLive, 0);
   if (S.tool === 'avwap' && !isDaily()) setTool('cursor');
@@ -778,7 +781,7 @@ function renderSide() {
     $('#btCard').textContent = '结论：' + b.verdict + '。三只标的合计 ' + b.n + ' 笔，平均 ' + b.mean_r + 'R；对照组（跌够 20% 后随便挑一天买）平均 ' + b.control_mean_r + 'R，p = ' + b.p + '，不显著。所以这里只做观察。';
   }
   window.FENarrate.sync();
-  if (!st) { $('#sigCard').innerHTML = '<div class="eng">计算中…</div>'; $('#tiles').innerHTML = ''; $('#basisBody').innerHTML = ''; $('#notes').innerHTML = ''; $('#sigList').innerHTML = ''; return; }
+  if (!st) { $('#sigCard').innerHTML = '<div class="eng">计算中…</div>'; $('#tiles').innerHTML = ''; $('#basisBody').innerHTML = ''; $('#notes').innerHTML = ''; $('#sigList').innerHTML = ''; window.FEQuant.render(); return; }
   const c = st.conclusion, sg = st.signal, cd = st.card || {};
   // 规则模型卡片：全部来自引擎（st.card 由后端填），不经过 Claude
   $('#sigCard').innerHTML = '<div class="eng">◎ 四要素规则引擎 ' + esc(S.meta ? S.meta.engine.version : '') + ' · ' + esc(st.ticker) + ' ' + st.asof + '</div>' +
@@ -815,6 +818,7 @@ function renderSide() {
     b.onclick = () => setReplay(true, q.sig);
     list.appendChild(b);
   });
+  window.FEQuant.render();       // 选了后手模型时，信号卡和六格换成后手模型的
 }
 
 // ---------- 解说和图的联动 ----------
@@ -1072,10 +1076,18 @@ function bind() {
   $('#sideClose').onclick = () => { S.sideOpen = false; store.set('side', false); renderTop(); syncUrl(); };
   window.FENarrate.init({
     api, toast, ticker: () => S.ticker, asof: () => asofDate(), ready: () => !!stateFresh(), flash: flashStep,
-    saved: () => !!(stateFresh() && S.state.ai_saved),
+    model: () => window.FEQuant.model(),
+    saved: () => !!(stateFresh() && S.state.ai_saved && S.state.ai_saved[window.FEQuant.model()]),
     fake: () => new URLSearchParams(location.search).get('aifake') === '1' || store.get('aifake', false),   // 测试开关：往 Claude 输出里塞假数字
     clearFlash,
     onReveal: n => { S.reveal = n; renderEvidence(); },      // 四问出到第几问，证据条就亮到第几条
+  });
+  window.FEQuant.init({
+    api, toast, S, store, esc, fmtP, C, rgba, X, Y, g: () => ctx, OV: () => OV, label, drawPolyline, stateFresh: () => !!stateFresh(), isDaily, asofDate, ptFromEvent,
+    redraw: () => { S.rev++; }, resized: () => { setTimeout(() => tick(true), 0); }, replayTo: d => setReplay(true, d), refreshState: () => queueState(true),
+    setAuto: on => { if (S.auto !== on) { S.auto = on; store.set('auto', on); renderTop(); syncPriceLines(); S.rev++; } },
+    modelChanged: () => { renderEvidence(); renderSide(); syncPriceLines(); S.rev++; },
+    narr: window.FENarrate,
   });
   $('#refreshBtn').onclick = refreshData;
   $('#modalClose').onclick = () => { $('#modal').hidden = true; };

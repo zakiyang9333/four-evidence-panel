@@ -266,7 +266,7 @@ class NoKey(unittest.TestCase):
         for t in ('SPCX', 'NVDA', 'QQQ'):
             self.assertEqual(http(p, f'/api/bars?ticker={t}')[0], 200)
             self.assertEqual(json.loads(http(p, f'/api/state?ticker={t}&asof=2026-11-13')[1])['asof'], '2026-11-13')
-        code, body = http(p, '/'); self.assertEqual(code, 200); self.assertIn('未验证，仅观察。回测证据不足，不是买入建议。', body)
+        code, body = http(p, '/'); self.assertEqual(code, 200); self.assertIn('四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据', body)
         self.assertEqual(http(p, '/static/app.js')[0], 200)
         self.assertEqual(http(p, '/static/vendor/lightweight-charts.standalone.production.js')[0], 200)
         # 没有密钥：模板版解说照常工作；点“润色”也只是退回模板并说明原因
@@ -463,9 +463,28 @@ class WithKey(unittest.TestCase):
         self.assertEqual(len(FakeClaude.seen), n + 1)
         self.assertNotIn('reused', forced)
         # 状态里带着“这一天有没有保存过”，前端据此决定要不要直接显示
-        self.assertTrue(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-18')[1])['ai_saved'])
-        self.assertFalse(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-19')[1])['ai_saved'])
+        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-18')[1])['ai_saved'], {'four': True, 'houshou': False})   # 每个模型各记各的
+        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-19')[1])['ai_saved'], {'four': False, 'houshou': False})
         self.assertEqual(http(self.s.port, '/api/ai/cached?ticker=XXXX&asof=2009-03-18')[0], 404)
+
+    def test_houshou_model_gets_its_own_reading_and_memory(self):
+        """后手模型：Claude 拿到面板的结果（表盘、清单、结构线），解读按模型分开保存，互不覆盖；四证那份的记忆不受影响。"""
+        four = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2016-05-16'})[1])
+        n = len(FakeClaude.seen)
+        res = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2016-05-16', 'model': 'houshou'})[1])
+        self.assertEqual(len(FakeClaude.seen), n + 1)
+        self.assertEqual((res['source'], res['rule_model'], four['rule_model']), ('claude', 'houshou', 'four'))
+        self.assertTrue(all(st['evidence'] == 0 for st in res['narration']['steps']))        # 后手模型没有四项证据可对
+        sent = json.loads(FakeClaude.seen[-1][2]['messages'][0]['content'])
+        self.assertEqual(sent['quant']['selected_model'], '后手·成本线回踩 v0.1')
+        self.assertEqual(sent['quant']['rule_signal']['phase'], '回落中')
+        self.assertIn('写死的', FakeClaude.seen[-1][2]['system'])                             # 提示词里说了：清单跟不上走势时直接说
+        self.assertTrue(os.path.exists(os.path.join(self.s.cache, 'QQQ_2016-05-16_houshou.json')))
+        again = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2016-05-16', 'model': 'houshou'})[1])
+        self.assertEqual((len(FakeClaude.seen), again['reused']), (n + 1, True))             # 记忆照样有效
+        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2016-05-16')[1])['ai_saved'], {'four': True, 'houshou': True})
+        nar = json.loads(http(self.s.port, '/api/ai/narrate?ticker=QQQ&asof=2016-05-16&model=four')[1])
+        self.assertEqual((nar['polished']['rule_model'], nar['polished']['same_input']), ('four', True))
 
     def test_fingerprint_follows_market_and_positions_only(self):
         """同一盘面、同一批仓位 = 同一份解读。换模型、改提示词、仓位文件重新同步、过了几天，都不算变。"""

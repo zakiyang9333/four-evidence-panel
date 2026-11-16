@@ -14,3 +14,8 @@ screenshots/review_*/
 
 # 视频截图是别人的作品，不放进仓库
 ref/
+
+# 后手模型的手动成本锚点是本机状态
+data/houshou_anchor.json
+screenshots/quant_houshou_SPCX.png
+wip_quant/

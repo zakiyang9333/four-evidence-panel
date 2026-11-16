@@ -22,7 +22,7 @@
     try { localStorage.clear(); } catch (e) { /* 忽略 */ }
 
     // 固定提示：常驻，不能关
-    ok('banner_text', $('#banner').textContent.trim() === '未验证，仅观察。回测证据不足，不是买入建议。', $('#banner').textContent);
+    ok('banner_text', $('#banner').textContent.trim() === '四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据', $('#banner').textContent);
     ok('banner_not_closable', !$('#banner button') && !$('#banner [role=button]') && getComputedStyle($('#banner')).display !== 'none');
 
     // 三只标的都能切换；2026-11-13 的状态
@@ -256,6 +256,27 @@
       const kinds = S.pf.overlays.SPCX.lines.map(l => l.kind);
       ok('pf_overlay_lines', kinds[0] === 'cost' && kinds.indexOf('zero') >= 0 && S.pf.overlays.SPCX.lines.find(l => l.kind === 'zero').est === true &&
         S.pf.overlays.SPCX.valuation.length > 0 && document.querySelector('[data-ind=pfval]').checked === false, kinds);
+    }
+    // 「AI 量化」面板（补充指令 3）：表盘、模型切换、后手清单条、四步、划线、编号图例
+    {
+      const QF = window.FEQuant, NA = window.FENarrate;
+      await pick('NVDA'); await until(() => QF.fresh(), 8000);
+      ok('quant_gauge', QF.fresh() && /^[+-]?\d+$/.test($('#qTotal').textContent) && document.querySelectorAll('#qScore .q-part').length === 5 && $('#qLabel').textContent === QF.data().score.label, $('#qScore').textContent);
+      const sel = $('#qModel'); sel.value = 'houshou'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await until(() => QF.fresh() && QF.model() === 'houshou', 8000); await frame();
+      const qd = QF.data();
+      ok('quant_houshou_bar', !$('#qBar').hidden && /后手战法/.test($('#qBar').textContent) && $('#evidence').hidden && /后手·成本线回踩/.test($('#sigCard').textContent) &&
+        document.querySelectorAll('#tiles .tile').length === 6 && /视频未说明/.test($('#tiles').textContent) && /未回测/.test($('#sigFoot').textContent), $('#qBar').textContent);
+      ok('quant_legend_numbered', !$('#qLegend').hidden && document.querySelectorAll('#qLegend li').length === qd.legend.length && qd.legend.length >= 3, qd.legend.length);
+      ok('quant_no_order_buttons', ![...document.querySelectorAll('button')].some(b => /买入|下单|卖出/.test(b.textContent)) && $('#qShort').disabled && /尚未回测/.test($('#banner').textContent));
+      $('#qRun').click(); await until(() => !QF.state().running && QF.state().steps && QF.state().steps.every(s => s.state === 'done'), 20000); await frame();
+      const stp = QF.state().steps || [];
+      ok('quant_four_steps', stp.length === 4 && stp.every(s => s.state === 'done' && s.ms != null) && new RegExp('共 ' + qd.lines.length + ' 条').test(stp[2].note) && !!NA.current() && /模板|Claude/.test($('#narrSrc').textContent), stp);
+      ok('quant_lines_listed', document.querySelectorAll('#qLines .q-lines input').length === qd.lines.length && QF.state().linesOn === true);
+      ok('quant_params_marked_estimate', /估算/.test($('#qParams').textContent) && /样本数/.test($('#qHist').textContent));
+      sel.value = 'four'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.model() === 'four', 8000); await frame();
+      ok('quant_back_to_four', $('#qBar').hidden && !$('#evidence').hidden && lit() === S.state.lit && /四要素规则引擎/.test($('#sigCard').textContent));
+      await pick('SPCX');
     }
     const ext = performance.getEntriesByType('resource').map(e => e.name).filter(u => new URL(u).host !== location.host && !(helper && new URL(u).port === helper));
     ok('no_external_requests', ext.length === 0, ext);

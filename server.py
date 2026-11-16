@@ -8,6 +8,9 @@ GET  /api/avwap?ticker=&anchor=&asof=   手动锚定 VWAP 画线用
 GET  /api/ai/narrate?ticker=&asof=       视频式四问解说的模板版（不调用 API），外加上次 Claude 润色的版本（如果有）
 GET  /api/ai/cached?ticker=&asof=        这只标的这一天上次的 Claude 解说（本机保存），以及输入是否变过
 GET  /api/live?ticker=      盘中实时价和今天常规时段的未收盘 K 线（只画图，不参与判定）
+GET  /api/quant?ticker=&model=houshou|four&asof=   「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发
+POST /api/quant/narrate     这份结果的解说：模板（免费）或 Claude（body.claude 为真）
+POST /api/quant/anchor      后手模型的手动成本锚点（存 data/houshou_anchor.json）
 GET  /api/portfolio         「持仓」页的全部内容（只读 portfolio/ 里的文件）
 GET  /api/portfolio/version 持仓文件有没有变（前端每 15 秒问一次，变了才重取）
 GET  /api/portfolio/snapshot?name=   某一份 App 快照的原文
@@ -30,6 +33,7 @@ import live
 import narrate
 import panel
 import portfolio
+import quant
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(ROOT, 'static')
@@ -94,8 +98,12 @@ def meta():
                 engine=dict(version='v1.0', params=panel.P, fixed={k: panel.F[k] for k in ('hi_win', 'div_gap', 'tgt_win', 'max_hold')}))
 
 
-def ai_inputs(t, asof):
-    """Everything one AI reading is built from, plus a fingerprint of it."""
+def ai_model(m):
+    return 'houshou' if m == 'houshou' else 'four'
+
+
+def ai_inputs(t, asof, model='four'):
+    """Everything one AI reading is built from, plus a fingerprint of it. Returns a dict."""
     state = panel.state_at(t, asof or None)
     B = panel.load(t)['B']
     i = state['index']
@@ -106,7 +114,16 @@ def ai_inputs(t, asof):
     pos = portfolio.relevant_positions(t) if state['is_latest'] else None
     bt = panel.backtest_summary()
     facts = narrate.build_facts(t, state['asof'])
-    return facts, bars, bt, pos, ai_explain.fingerprint(facts, bars, bt, CFG, pos)
+    q = quant.result(t, model, state['asof'])
+    qf = quant.facts_for_ai(q)
+    # 四证：指纹和以前一样（表盘和结构线都是从同一批 K 线算出来的，盘面没变它们就没变），保存过的解读继续有效。
+    # 后手：再加上清单结果，手动改了成本锚点就算变了。
+    extra = dict(model='houshou', signal=qf['rule_signal']) if model == 'houshou' else None
+    tmpl = quant.template(q) if model == 'houshou' else narrate.template(facts)
+    return dict(facts=facts, bars=bars, bt=bt, pos=pos, q=q, qf=qf, tmpl=tmpl, model=model,
+                positive=(q['signal']['verdict'] == '下后手') if model == 'houshou' else facts['all4'],
+                allowed=narrate.allowed_numbers(facts, bars, bt, pos, qf, tmpl),
+                fp=ai_explain.fingerprint(facts, bars, bt, CFG, pos, extra))
 
 
 def narration_result(t, facts, bt, narr, source, **extra):
@@ -115,23 +132,24 @@ def narration_result(t, facts, bt, narr, source, **extra):
                 score=facts['score'], armed=facts['armed'], **extra)
 
 
-def ai_narrate(t, asof):
-    """Free, instant template narration, plus the last saved Claude version for this day if there is one."""
-    facts, bars, bt, pos, fp = ai_inputs(t, asof)
-    res = narration_result(t, facts, bt, narrate.template(facts), 'template')
-    rows = ai_cache_read(t, facts['asof'])
+def ai_narrate(t, asof, model='four'):
+    """Free, instant template narration, plus the last saved Claude version for this day and model if there is one."""
+    x = ai_inputs(t, asof, ai_model(model))
+    facts, bt, pos = x['facts'], x['bt'], x['pos']
+    res = narration_result(t, facts, bt, x['tmpl'], 'template', rule_model=x['model'])
+    rows = ai_cache_read(t, facts['asof'], x['model'])
     if rows:
-        res['polished'] = saved_view(rows[0], facts, bars, bt, pos, fp)
+        res['polished'] = saved_view(rows[0], x)
     ok, why = ai_explain.status(CFG)
     res['polish'] = dict(enabled=ok, reason=why, model=CFG['ai_model'], positions=len(pos['positions']) if pos else 0)
     return res
 
 
-def saved_view(row, facts, bars, bt, pos, fp):
+def saved_view(row, x):
     """A saved Claude reading as it is shown again: marked as saved, told whether the market or the positions changed since,
     and its numbers checked again by today's rules. No API call."""
-    old = dict(row, same_input=row.get('fingerprint') == fp, cached=True)
-    bad = narrate.bad_numbers(old['narration'], narrate.allowed_numbers(facts, bars, bt, pos))
+    old = dict(row, same_input=row.get('fingerprint') == x['fp'], cached=True)
+    bad = narrate.bad_numbers(old['narration'], x['allowed'])
     old.pop('unverified', None); old.pop('notice', None); old.pop('code', None)
     if bad:
         old.update(unverified=bad[:20], notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
@@ -143,27 +161,27 @@ AI_CACHE = os.environ.get('FE_CACHE_DIR') or os.path.join(ROOT, 'cache', 'ai')
 AI_KEEP = 5
 
 
-def _ai_cache_path(t, asof):
+def _ai_cache_path(t, asof, model='four'):
     if t not in panel.TICKERS or not (len(asof) == 10 and asof[4] == '-' and asof[7] == '-' and asof.replace('-', '').isdigit()):
         raise KeyError(t)
-    return os.path.join(AI_CACHE, f'{t}_{asof}.json')
+    return os.path.join(AI_CACHE, f'{t}_{asof}' + ('_houshou' if model == 'houshou' else '') + '.json')      # 每个模型各记各的
 
 
-def ai_cache_read(t, asof):
+def ai_cache_read(t, asof, model='four'):
     try:
-        with open(_ai_cache_path(t, asof), encoding='utf-8') as f:
+        with open(_ai_cache_path(t, asof, model), encoding='utf-8') as f:
             return json.load(f)
     except (OSError, ValueError):
         return []
 
 
-def ai_cache_add(t, asof, entry):
+def ai_cache_add(t, asof, entry, model='four'):
     os.makedirs(AI_CACHE, exist_ok=True)
-    rows = ([entry] + ai_cache_read(t, asof))[:AI_KEEP]
-    tmp = _ai_cache_path(t, asof) + '.tmp'
+    rows = ([entry] + ai_cache_read(t, asof, model))[:AI_KEEP]
+    tmp = _ai_cache_path(t, asof, model) + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(rows, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, _ai_cache_path(t, asof))
+    os.replace(tmp, _ai_cache_path(t, asof, model))
 
 
 def ai_cached(t, asof):
@@ -172,7 +190,7 @@ def ai_cached(t, asof):
     rows = ai_cache_read(t, state['asof'])
     if not rows:
         return dict(ok=True, found=False, asof=state['asof'], ticker=t)
-    fp = ai_inputs(t, state['asof'])[4]
+    fp = ai_inputs(t, state['asof'])['fp']
     return dict(ok=True, found=True, ticker=t, asof=state['asof'], entry=rows[0], same_input=rows[0].get('fingerprint') == fp,
                 history=[{k: r.get(k) for k in ('created_at', 'model', 'positions_sent')} for r in rows])
 
@@ -180,37 +198,38 @@ def ai_cached(t, asof):
 def ai_analyze(body):
     """“让 Claude 润色”。Whatever goes wrong, the answer is still a four-question narration: the template, with a notice."""
     t = body.get('ticker')
-    facts, bars, bt, pos, fp = ai_inputs(t, body.get('asof'))
-    tmpl = narrate.template(facts)
+    x = ai_inputs(t, body.get('asof'), ai_model(body.get('model')))
+    facts, bars, bt, pos, fp, tmpl, model = x['facts'], x['bars'], x['bt'], x['pos'], x['fp'], x['tmpl'], x['model']
     if not body.get('force') and not body.get('test_fake_number'):
         # 记忆：盘面和仓位都没变，就把保存的那一版原样给回去，不再调用 Claude。要重新分析得明确带 force。
-        rows = ai_cache_read(t, facts['asof'])
+        rows = ai_cache_read(t, facts['asof'], model)
         if rows and rows[0].get('fingerprint') == fp:
-            return 200, dict(saved_view(rows[0], facts, bars, bt, pos, fp), reused=True)
+            return 200, dict(saved_view(rows[0], x), reused=True)
     if not _ai_lock.acquire(blocking=False):
         return 409, dict(ok=False, error='上一次分析还没结束。')
     try:
-        got = ai_explain.polish(facts, bars, bt, CFG, pos)
+        got = ai_explain.polish(facts, bars, bt, CFG, pos, x['qf'])
         if not got.get('ok'):
-            return 200, narration_result(t, facts, bt, tmpl, 'template', notice='没能用上 Claude，已改用模板：' + got['error'], code=got.get('code'))
-        allowed = narrate.allowed_numbers(facts, bars, bt, pos)
+            return 200, narration_result(t, facts, bt, tmpl, 'template', notice='没能用上 Claude，已改用模板：' + got['error'], code=got.get('code'), rule_model=model)
+        allowed = x['allowed']
         # Claude 只说在图上标哪一天、哪个位置；价位由这里从 K 线数据里取。直接给的价位必须是输入里有的数。
-        narr, why = narrate.normalize(got['raw'], facts, tmpl, narrate.chart_data(t, facts['asof']), {round(a, 2) for a in allowed})
+        narr, why = narrate.normalize(got['raw'], facts, tmpl, narrate.chart_data(t, facts['asof']), {round(a, 2) for a in allowed},
+                                      positive=x['positive'], link_evidence=model == 'four')
         if narr is None:
-            return 200, narration_result(t, facts, bt, tmpl, 'template', notice=f'AI 输出的结构不对（{why}），已改用模板', code='shape')
+            return 200, narration_result(t, facts, bt, tmpl, 'template', notice=f'AI 输出的结构不对（{why}），已改用模板', code='shape', rule_model=model)
         if body.get('test_fake_number'):                # 测试开关：往 Claude 的输出里塞一个假数字，看核对能不能拦住
             narr['steps'][0]['say'] += '，目标看到 987.65'
         bad = narrate.bad_numbers(narr, allowed)
         if bad and CFG.get('ai_strict_numbers', False):     # 严格模式：有一个对不上就整段不用
-            return 200, narration_result(t, facts, bt, tmpl, 'template', notice='AI 输出含无法核对的数字，已改用模板', code='numbers', unverified=bad[:8])
-        res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], positions_sent=len(pos['positions']) if pos else 0,
+            return 200, narration_result(t, facts, bt, tmpl, 'template', notice='AI 输出含无法核对的数字，已改用模板', code='numbers', unverified=bad[:8], rule_model=model)
+        res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], rule_model=model, positions_sent=len(pos['positions']) if pos else 0,
                                created_at=time.strftime('%Y-%m-%d %H:%M:%S'), fingerprint=fp,
                                tokens_in=got.get('tokens_in'), tokens_out=got.get('tokens_out'))
         if bad:     # 自由分析时 Claude 会自己算数：对不上的不丢弃，标出来让人自己判断
             res.update(unverified=bad[:20], code='numbers',
                        notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
         try:
-            ai_cache_add(t, facts['asof'], res)
+            ai_cache_add(t, facts['asof'], res, model)
         except OSError:
             res['cache_error'] = True
         return 200, res
@@ -263,13 +282,15 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == '/api/data/version':
                     return self._send(200, {t: panel.freshness(t) for t in panel.TICKERS})
                 if u.path == '/api/ai/narrate':
-                    return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None))
+                    return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None, q.get('model')))
+                if u.path == '/api/quant':
+                    return self._send(200, quant.result(q.get('ticker', ''), ai_model(q.get('model') or 'houshou'), q.get('asof') or None))
                 if u.path == '/api/ai/cached':
                     return self._send(200, ai_cached(q.get('ticker', ''), q.get('asof') or None))
                 if u.path == '/api/state':
                     st = panel.state_at(q.get('ticker', ''), q.get('asof') or None)
                     st['card'] = narrate.card_from_state(st, panel.backtest_summary())     # 规则模型卡片：只来自引擎
-                    st['ai_saved'] = os.path.exists(_ai_cache_path(st['ticker'], st['asof']))   # 这一天有没有保存过 Claude 解说
+                    st['ai_saved'] = {m: os.path.exists(_ai_cache_path(st['ticker'], st['asof'], m)) for m in ('four', 'houshou')}   # 这一天、各个模型有没有保存过 Claude 解说
                     return self._send(200, st)
                 if u.path == '/api/portfolio':
                     return self._send(200, portfolio.payload())
@@ -317,9 +338,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*run_refresh())
             if u.path == '/api/ai/analyze':
                 return self._send(*ai_analyze(body))
+            if u.path == '/api/quant/narrate':        # 补充指令 3 的接口名：claude 为真才调用 Claude，否则给模板和保存过的那一版
+                if body.get('claude'):
+                    return self._send(*ai_analyze(body))
+                return self._send(200, ai_narrate(body.get('ticker', ''), body.get('asof') or None, body.get('model') or 'houshou'))
+            if u.path == '/api/quant/anchor':         # 手动成本锚点：date 为空就是清除，回到自动
+                t = body.get('ticker', '')
+                return self._send(200, dict(ok=True, ticker=t, anchor=quant.set_anchor(t, body.get('date') or None)))
             return self._send(404, dict(ok=False, error='没有这个接口。'))
         except KeyError:
             return self._send(404, dict(ok=False, error='没有这个标的。'))
+        except ValueError as e:
+            return self._send(400, dict(ok=False, error=str(e) or '请求不对。'))
         except BrokenPipeError:
             pass
         except Exception as e:      # noqa: BLE001

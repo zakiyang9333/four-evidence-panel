@@ -52,6 +52,19 @@ PORTFOLIO_RULES = """
 解说要遵守 zaki 的规则：核心仓按估值失效，没有价格止损；战术单四要素不到 4/4 不开；不给具体下单指令。
 仓位和图上价位（成本线、止损线、行权价、扇子中线）的相对位置可以单独讲一步；不评价该不该继续持有，不建议调整仓位。positions_stale 为真时要提醒以券商 App 为准。"""
 
+# 有「AI 量化」面板的结果时追加的一段（补充指令 3）。zaki 11-16：“写死的规则未必能赶上千变万化的市场”。
+QUANT_RULES = """
+
+输入里还有 quant：这是「AI 量化」面板上已经显示的三样东西，都是代码算出来的。
+- chart_score：当前图表评分（−100 到 +100）和五个分项。公式是估算的，只描述图表现状，不是预测。
+- rule_signal：使用者选的规则模型（selected_model）的清单结果。四证·抄底就是上面那套。后手·成本线回踩是另一套：先找成本锚点（横盘第一根）算成本线，数三次冲高和每一冲的成交量；拉升时看“离成本线太远、第三冲缩量、天量长上影”这张不追清单，回落时看“回到成本线、两段跌幅相当（AB=CD）、缩量刺破收回”这张后手清单。这套模型没有回测过，很多参数是估算的。
+- structure_lines：面板画在图上的支撑、压力、趋势线和斐波那契回撤价位。
+表盘和规则信号是两套独立的东西，可以不一致，不用硬凑成一个说法。
+
+最要紧的一条：规则清单是写死的，市场不会照着清单走。清单显示“无结构”“不适用”，或者你看到清单明显跟不上眼前的走势（比如它数出来的冲、锚点、两段回落和图上真正要紧的结构对不上），就直接说这套规则今天用不上、为什么用不上，然后讲你自己从 K 线里看到的结构。不要为了配合清单硬套三冲和 ABCD。清单里每一项成立不成立、阶段、结论是引擎结果，你不能改写，但可以评价它适不适用、漏看了什么。
+
+选的是后手模型时，steps 里的 evidence 一律写 0。后手清单三项全中时，结论最多说“条件齐了（未回测）”，不要说成可以入场；有核心仓时不要给价格止损。"""
+
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 
 
@@ -66,12 +79,14 @@ def status(cfg):
     return True, ''
 
 
-def system_prompt(with_positions):
-    return SYSTEM + (PORTFOLIO_RULES if with_positions else '')
+def system_prompt(with_positions, with_quant=False):
+    return SYSTEM + (QUANT_RULES if with_quant else '') + (PORTFOLIO_RULES if with_positions else '')
 
 
-def build_input(facts, bars60, backtest, positions=None):
+def build_input(facts, bars60, backtest, positions=None, quant=None):
     body = dict(facts)
+    if quant:
+        body['quant'] = quant           # 表盘、所选模型的清单结果、结构线：面板上已经显示的那些
     body['bars'] = dict(columns=['date', 'open', 'high', 'low', 'close', 'volume'], rows=bars60)
     body['backtest'] = backtest
     if positions:
@@ -79,18 +94,19 @@ def build_input(facts, bars60, backtest, positions=None):
     return json.dumps(body, ensure_ascii=False, separators=(',', ':'))
 
 
-def fingerprint(facts, bars60, backtest, cfg=None, positions=None):
+def fingerprint(facts, bars60, backtest, cfg=None, positions=None, extra=None):
     """Hash of what a reading is about: the engine facts, the bars, the backtest summary and the relevant positions.
     Same hash = the saved reading still applies, so no new call is needed.
     Deliberately not in it: the model and the prompt wording (a reading of the same market stays a reading of it),
     when the positions file was last synced, and the notes (one of them counts days since the last bar)."""
     f = {k: v for k, v in facts.items() if k != 'notes'}
     rows = (positions or {}).get('positions') or []
-    raw = json.dumps([f, bars60, backtest, rows], ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
+    parts = [f, bars60, backtest, rows] + ([extra] if extra is not None else [])    # extra：后手模型的清单结果（含手动锚点）；四证不传，指纹和以前一样
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
     return 'd2-' + hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]
 
 
-def polish(facts, bars60, backtest, cfg, positions=None):
+def polish(facts, bars60, backtest, cfg, positions=None, quant=None):
     """Ask Claude for the JSON narration. Returns dict(ok, raw | error, model). Raises nothing."""
     ok, why = status(cfg)
     if not ok:
@@ -102,8 +118,8 @@ def polish(facts, bars60, backtest, cfg, positions=None):
     out_cfg = {'format': {'type': 'json_schema', 'schema': narrate.SCHEMA}}       # 只允许按这个结构输出 JSON
     if cfg.get('ai_effort'):
         out_cfg['effort'] = cfg['ai_effort']
-    kw = dict(model=cfg['ai_model'], max_tokens=int(cfg.get('ai_max_tokens', 16000)), system=system_prompt(bool(positions)),
-              messages=[{'role': 'user', 'content': build_input(facts, bars60, backtest, positions)}], output_config=out_cfg)
+    kw = dict(model=cfg['ai_model'], max_tokens=int(cfg.get('ai_max_tokens', 16000)), system=system_prompt(bool(positions), bool(quant)),
+              messages=[{'role': 'user', 'content': build_input(facts, bars60, backtest, positions, quant)}], output_config=out_cfg)
 
     def run(with_fallback):
         if with_fallback:   # if the model declines, the API re-runs the request on its default fallback model

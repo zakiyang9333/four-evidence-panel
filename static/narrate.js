@@ -23,7 +23,7 @@ window.FENarrate = (() => {
   function reset() {            // 图表换了标的或日期：这段解说不再对应当前状态
     seq++; clearTimeout(timer); clearTimeout(armed); armed = 0; tried = ''; cur = null; shown = 0; busy = false;
     $('#narr').hidden = true; $('#narr').textContent = ''; $('#narrNotice').hidden = true; $('#narrWatch').hidden = true;
-    $('#narrMeta').textContent = ''; $('#aiPolish').hidden = true; $('#aiSkip').hidden = true;
+    $('#narrMeta').textContent = ''; $('#aiPolish').hidden = true; $('#aiSkip').hidden = true; $('#narrSrc').hidden = true;
     $('#aiRun').textContent = '✦ AI 分析';
     if (ctx) { ctx.onReveal(null); ctx.clearFlash(); }
     sync();
@@ -40,7 +40,7 @@ window.FENarrate = (() => {
         : upToDate() ? '重新分析' : '按新数据重新分析（会计费）';
       b.title = p.enabled ? '把引擎事实交给 ' + p.model + ' 分析；数字会逐个核对，结论仍以引擎为准' : p.reason;
     }
-    $('#aiHint').textContent = !cur ? '按视频的四问走一遍：量 → MACD → 扇子 → 成本线。先出模板版，不花钱。'
+    $('#aiHint').textContent = !cur ? (ctx && ctx.model() === 'houshou' ? '按后手战法的三问走一遍，再看一眼表盘。先出模板版，不花钱。' : '按视频的四问走一遍：量 → MACD → 扇子 → 成本线。先出模板版，不花钱。')
       : p && !p.enabled ? p.reason
       : cur.source === 'claude' ? (upToDate() ? '这一版已存在本机：重播、切换标的、重开面板都不再计费。' : '这一版保存之后，数据或仓位变过。')
       : (p && p.positions ? '润色时会附上这只标的相关的 ' + p.positions + ' 个仓位，不发整份账户。' : '');
@@ -56,7 +56,7 @@ window.FENarrate = (() => {
     tried = key;
     const my = seq;
     try {
-      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof());
+      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + '&model=' + ctx.model());
       if (my !== seq || cur || busy || !r.polished) return;
       show(Object.assign({}, r.polished, { polish: r.polish }), false);
     } catch (e) { /* 取不到就算了，点“AI 分析”还能再取 */ }
@@ -66,7 +66,7 @@ window.FENarrate = (() => {
     if (busy || !ctx.ready()) return;
     const my = ++seq; busy = true; sync();
     try {
-      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof());
+      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + '&model=' + ctx.model());
       if (my !== seq) return;
       const use = r.polished ? Object.assign({}, r.polished, { polish: r.polish }) : r;
       busy = false; show(use, true);
@@ -83,7 +83,7 @@ window.FENarrate = (() => {
     const my = ++seq, keep = cur.polish; busy = true; sync();
     const t0 = Date.now(), tick = setInterval(() => { $('#narrMeta').textContent = 'Claude 正在写… ' + Math.round((Date.now() - t0) / 1000) + ' 秒'; }, 500);
     try {
-      const r = await ctx.api('/api/ai/analyze', { ticker: ctx.ticker(), asof: ctx.asof(), test_fake_number: !!fake, force });
+      const r = await ctx.api('/api/ai/analyze', { ticker: ctx.ticker(), asof: ctx.asof(), test_fake_number: !!fake, force, model: ctx.model() });
       clearInterval(tick);
       if (my !== seq) return;
       busy = false;
@@ -139,6 +139,7 @@ window.FENarrate = (() => {
         (res.cached && res.same_input === false ? ' · 之后数据或仓位变过，可能过时' : '')
       : '模板版 · 不调用 API';
     $('#narrMeta').textContent = src + ' · ' + res.ticker + ' ' + res.asof;
+    const tag = $('#narrSrc'); tag.hidden = false; tag.textContent = res.source === 'claude' ? 'Claude' : '模板'; tag.className = 'qtag' + (res.source === 'claude' ? ' pos' : '');
     const nt = $('#narrNotice'); nt.hidden = !res.notice; nt.textContent = res.notice || '';
     const w = $('#narrWatch'); w.textContent = ''; w.hidden = true;
     w.appendChild(el('div', 'w-title', '下一根 K 线看什么'));
