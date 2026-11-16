@@ -232,3 +232,47 @@ def search_days(name, ticker, rows, cfg):
     except Exception as e:      # noqa: BLE001
         return dict(ok=False, code='error', error=f'搜索失败：{type(e).__name__}')
 
+
+# ---------- 把存档的英文新闻标题翻成中文 ----------
+
+TRANSLATE_SYSTEM = """把给你的英文财经新闻标题逐条翻成简体中文。
+要求：忠实原意，一条标题翻成一句，不加评论、不解释、不合并也不拆分；数字、百分比、公司名和人名不能丢；
+常见公司和人名用通行的中文叫法（Nvidia 写英伟达，Jensen Huang 写黄仁勋，Fed 写美联储），没有通行叫法的保留英文；股票代码原样保留。
+输出的条数和顺序必须和输入完全一致。"""
+TRANSLATE_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['zh'],
+                    'properties': {'zh': {'type': 'array', 'items': {'type': 'string'}}}}
+
+
+def translate_titles(titles, cfg):
+    """One request for a batch of headlines. Returns dict(ok, zh=[...] | error, model, tokens)."""
+    ok, why = status(cfg)
+    if not ok:
+        return dict(ok=False, error=why, code='disabled')
+    import anthropic
+    key = os.environ['ANTHROPIC_API_KEY'].strip()
+    scrub = lambda s: str(s).replace(key, '***')
+    client = anthropic.Anthropic(api_key=key, timeout=float(cfg.get('ai_timeout_s', 180)), max_retries=1)
+    ask = json.dumps(dict(titles=list(titles)), ensure_ascii=False)
+    try:
+        with client.messages.stream(model=cfg.get('ai_translate_model') or cfg['ai_model'], max_tokens=int(cfg.get('ai_translate_max_tokens', 8000)),
+                                    system=TRANSLATE_SYSTEM, messages=[{'role': 'user', 'content': ask}],
+                                    output_config={'format': {'type': 'json_schema', 'schema': TRANSLATE_SCHEMA}, 'effort': cfg.get('ai_translate_effort', 'low')}) as stream:
+            msg = stream.get_final_message()
+        if msg.stop_reason == 'refusal':
+            return dict(ok=False, code='refusal', error='模型拒绝了这次翻译。')
+        text = ''.join(b.text for b in msg.content if b.type == 'text').strip()
+        u = getattr(msg, 'usage', None)
+        return dict(ok=True, zh=json.loads(text).get('zh'), model=msg.model, tokens_in=getattr(u, 'input_tokens', None), tokens_out=getattr(u, 'output_tokens', None))
+    except ValueError:
+        return dict(ok=False, code='parse', error='翻译返回的不是合法 JSON。')
+    except anthropic.AuthenticationError:
+        return dict(ok=False, code='auth', error='API 密钥无效（401）。')
+    except anthropic.RateLimitError:
+        return dict(ok=False, code='rate', error='请求太频繁或额度用完了（429），稍后再试。')
+    except anthropic.APIStatusError as e:
+        return dict(ok=False, code='api', error=f'接口报错（{e.status_code}）：{scrub(getattr(e, "message", ""))[:200]}')
+    except anthropic.APIConnectionError:
+        return dict(ok=False, code='network', error='连不上 Anthropic 的接口，检查网络或代理。')
+    except Exception as e:      # noqa: BLE001
+        return dict(ok=False, code='error', error=f'翻译失败：{type(e).__name__}')
+

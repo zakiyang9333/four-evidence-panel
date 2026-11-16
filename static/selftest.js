@@ -301,14 +301,17 @@
       ok('notes_shown_on_ai_card_once', /自检写的一条/.test(nn[0]) && nn[1] === '' && /AI 解读/.test($('#noteCard').textContent), nn);      // 同一条备注不在两张卡片上重复
       // 原始的新闻标题不上卡片（又长又杂），事件日和联网搜到的概括才上
       const real = NF.data(), mix = JSON.parse(JSON.stringify(real));
-      mix.by_date[day] = [{ id: 'n1', kind: 'news', title: 'S&P 500, Dow, Nasdaq End Lower Amid Turmoil', fact: false }, { id: 'e1', kind: 'earnings', title: '财报日', fact: true },
+      mix.by_date[day] = [{ id: 'n1', kind: 'news', title: 'S&P 500, Dow, Nasdaq End Lower Amid Turmoil', title_zh: '标普、道指、纳指收跌', source: 'X', fact: false }, { id: 'e1', kind: 'earnings', title: '财报日', fact: true },
         { id: 's1', kind: 'search', title: '财报后下调指引', fact: false }];
       NF._use(mix);
       const fd = NF.forDraw([{ type: 'point', date: day, price: 1 }]).map(r => r.text);
       ok('notes_no_raw_headlines_on_cards', fd.length === 2 && /财报日/.test(fd[0]) && /财报后下调指引/.test(fd[1]) && !fd.some(t => /S&P/.test(t)), fd);
       const lines = [...document.querySelectorAll('#narr .n-notes span')];
       ok('notes_on_cards_are_one_line_each', lines.length > 0 && lines.every(sp => getComputedStyle(sp).whiteSpace === 'nowrap' && sp.title === sp.textContent), lines.length);
-      NF._use(real);
+      NF.openDay(day);       // 英文标题有中文翻译时显示中文，原文留在下面
+      const mt = $('#modalBody').textContent;
+      ok('notes_headlines_shown_in_chinese', /标普、道指、纳指收跌/.test(mt) && /原文：S&P 500/.test(mt) && mt.indexOf('标普') < mt.indexOf('原文：S&P'), mt.slice(0, 160));
+      NF._use(real); NF.openDay(day);
       window.FENarrate.reset();
       const row = [...document.querySelectorAll('#modalBody .note-row')].find(r => /自检写的一条/.test(r.textContent));
       if (row) row.querySelector('button').click();

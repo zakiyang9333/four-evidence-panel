@@ -18,6 +18,8 @@ EVENTS = [dict(date='2026-08-26', kind='earnings', title='财报日'), dict(date
           dict(date='2026-09-10', kind='dividend', title='除息日，每股派 0.01'), dict(date='bad', kind='earnings', title='x'), dict(date='2026-01-01', kind='ufo', title='x')]
 HEADS = [dict(date='2026-11-07', title='周六出的消息', source='某媒体', url='https://example.com/a'),         # 周六 → 记在周一那根
          dict(date='2026-11-05', title='暴跌当天的报道', source='某媒体', url='https://example.com/b')]
+HEADS_EN = [dict(date='2026-11-13', title='PPI +6.5% YoY: Highest in Nearly 4 Years', source='Zacks', url='https://example.com/en1'),
+            dict(date='2026-11-13', title='Nvidia Rebounds After Huang Exit as Treasury Yields Top 5%', source='24/7 Wall St.', url='https://example.com/en2')]
 NOW = time.mktime(time.strptime('2026-11-16 12:00:00', '%Y-%m-%d %H:%M:%S'))
 
 
@@ -95,6 +97,31 @@ class Store(unittest.TestCase):
         self.assertEqual([r['fact'] for r in a['notes'] if r['date'] == '2026-08-26'], [True])
         self.assertIn('没有备注不等于那天没事发生', a['coverage'])
         self.assertEqual(a['news_archive_since'], '2026-11-16')
+
+    def test_headlines_are_translated_once_and_kept_with_the_original(self):
+        notes.refresh('NVDA', events=lambda t: EVENTS, headlines=lambda t: HEADS_EN, now=NOW)
+        rows = notes.pending_translation('NVDA')
+        self.assertEqual([r['title'][:3] for r in rows], ['PPI', 'Nvi'])                  # 中文标题不用翻，只挑英文的
+        self.assertEqual(notes.payload('NVDA', now=NOW)['freshness']['untranslated'], 2)
+        done = notes.store_translation('NVDA', [r['id'] for r in rows], ['PPI 同比上涨 6.5%，近 4 年最高', 'not chinese'], dict(model='m'), now=NOW)
+        self.assertEqual(done, 1)                                                         # 第二条不是中文：不收，保持英文
+        p = notes.payload('NVDA', now=NOW)
+        got = {r['title']: r.get('title_zh') for r in p['by_date']['2026-11-13']}
+        self.assertEqual(got, {'PPI +6.5% YoY: Highest in Nearly 4 Years': 'PPI 同比上涨 6.5%，近 4 年最高', 'Nvidia Rebounds After Huang Exit as Treasury Yields Top 5%': None})
+        self.assertEqual((p['freshness']['headlines_zh'], p['freshness']['untranslated']), (1, 0))   # 翻失败的那条不反复重试
+        self.assertEqual(notes.pending_translation('NVDA'), [])
+        late = [dict(date='2026-11-16', title='News after the last bar', source='X', url='https://example.com/late')]
+        notes.refresh('NVDA', events=lambda t: EVENTS, headlines=lambda t: late, now=NOW)
+        p2 = notes.payload('NVDA', now=NOW)
+        self.assertEqual([r['title'] for r in p2['pending']], ['News after the last bar'])       # 最后一根 K 线之后的消息：单独列出，不丢
+        self.assertNotIn('2026-11-16', p2['by_date']); self.assertEqual(p2['freshness']['untranslated'], 1)
+        self.assertEqual(notes.payload('NVDA', '2026-11-12', now=NOW)['pending'], [])            # 回放时不给
+        notes.delete('NVDA', notes.pending_translation('NVDA')[0]['id'])
+        self.assertIn('PPI 同比上涨 6.5%，近 4 年最高', [n['text'] for n in notes.for_ai('NVDA', None)['notes']])   # 交给 AI 的也是中文
+        clean(); notes.refresh('NVDA', events=lambda t: EVENTS, headlines=lambda t: HEADS_EN, now=NOW)
+        rows = notes.pending_translation('NVDA')
+        self.assertEqual(notes.store_translation('NVDA', [r['id'] for r in rows], ['只有一条'], dict(model='m')), 0)     # 条数对不上：一条都不收
+        self.assertTrue(all(not r.get('title_zh') for r in notes.payload('NVDA', now=NOW)['by_date']['2026-11-13']))
 
     def test_notes_never_touch_the_engine(self):
         before = panel.state_at('NVDA')
@@ -198,6 +225,26 @@ class Api(unittest.TestCase):
             code, r = self.post('/api/notes/search', dict(ticker='NVDA', dates=['2026-11-05']))
             self.assertEqual((r['skipped'], r['added'], len(FakeClaude.seen)), (True, 0, n + 1))  # 查过了：不再调用，不再计费
             self.assertIn('2026-11-05', r['notes']['freshness']['searched_days'])
+        finally:
+            FakeClaude.reply = old
+
+    def test_translate_endpoint_translates_once(self):
+        notes.refresh('QQQ', events=lambda t: [], headlines=lambda t: HEADS_EN, now=NOW)
+        code, r = self.post('/api/notes/translate', dict(ticker='QQQ'), self.nokey)
+        self.assertEqual((code, r['ok'], r.get('translated')), (200, True, 0))            # 没密钥的那台服务用的是另一个备注目录：没有要翻的
+        old = FakeClaude.reply
+        FakeClaude.reply = dict(zh=['PPI 同比上涨 6.5%，近 4 年最高', '黄仁勋离任后英伟达反弹，美债收益率突破 5%'])
+        try:
+            n = len(FakeClaude.seen)
+            code, r = self.post('/api/notes/translate', dict(ticker='QQQ'))
+            self.assertEqual((code, r['ok'], r['translated'], r['asked']), (200, True, 2, 2), r)
+            sent = FakeClaude.seen[-1][2]
+            self.assertEqual(json.loads(sent['messages'][0]['content'])['titles'], [h['title'] for h in HEADS_EN])
+            self.assertIn('简体中文', sent['system'])
+            self.assertEqual(sorted(x['title_zh'] for x in r['notes']['by_date']['2026-11-13']), sorted(FakeClaude.reply['zh']))
+            self.assertEqual(r['notes']['freshness']['untranslated'], 0)
+            code, r = self.post('/api/notes/translate', dict(ticker='QQQ'))
+            self.assertEqual((r['skipped'], r['translated'], len(FakeClaude.seen)), (True, 0, n + 1))    # 翻过了：不再调用
         finally:
             FakeClaude.reply = old
 

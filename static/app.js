@@ -1095,6 +1095,7 @@ function bind() {
   window.FENotes.init({
     api, toast, S, esc, X, Y, g: () => ctx, OV: () => OV, label, stateFresh: () => !!stateFresh(), isDaily, asofDate, ptFromEvent,
     redraw: () => { S.rev++; }, narr: window.FENarrate, aiEnabled: () => !!(S.meta && S.meta.ai && S.meta.ai.enabled),
+    translateAuto: () => !!(S.meta && S.meta.ai && S.meta.ai.translate_auto),
   });
   window.FELearn.init({
     api, toast, esc, S, stateFresh: () => !!stateFresh(), asofDate, model: () => window.FEQuant.model(), resized: () => { setTimeout(() => tick(true), 0); },

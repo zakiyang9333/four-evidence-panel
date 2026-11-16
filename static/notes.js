@@ -6,7 +6,9 @@ window.FENotes = (() => {
   const $ = s => document.querySelector(s);
   const KIND = { earnings: ['财', '#fb923c'], split: ['拆', '#f472b6'], dividend: ['息', '#34d399'], manual: ['记', '#f7c600'], search: ['搜', '#a78bfa'], news: ['闻', '#60a5fa'] };
   const STRIP = 24;             // 主图底部这么高的一条是备注区
-  let c = null, data = null, seq = 0, busy = false;
+  let c = null, data = null, seq = 0, busy = false, translating = false;
+  const tried = {};             // 这次打开面板后，哪只标的已经自动翻译过一轮（失败了也不反复重试）
+  const zh = r => r.title_zh || r.title;        // 有中文就显示中文；原文留在弹窗里
 
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const fresh = () => !!(data && c.stateFresh() && data.ticker === c.S.ticker && data.asof === c.S.state.asof);
@@ -33,7 +35,21 @@ window.FENotes = (() => {
       use(r);
     } catch (e) { if (my === seq) c.toast('备注没取到：' + e.message, true); }
   }
-  function use(r) { data = r; render(); c.redraw(); if (c.narr.renotes) c.narr.renotes(); }
+  function use(r) { data = r; render(); c.redraw(); if (c.narr.renotes) c.narr.renotes(); autoTranslate(); }
+
+  // 存档里的新闻标题是英文的：有密钥就自动翻成中文存下来，每条只翻一次（config.json 里 ai_translate_auto 设成 false 可以关掉）
+  async function autoTranslate() {
+    const t = c.S.ticker;
+    if (!data || !data.is_latest || translating || tried[t] || !c.aiEnabled() || !c.translateAuto() || !(data.freshness.untranslated > 0)) return;
+    tried[t] = true; translating = true; render();
+    try {
+      const r = await c.api('/api/notes/translate', { ticker: t, asof: c.asofDate() });
+      if (r.ok === false) c.toast('标题没翻成：' + r.error, true);
+      else if (r.translated) c.toast('已把 ' + r.translated + ' 条英文标题翻成中文（用了 ' + r.tokens_in + ' 入 + ' + r.tokens_out + ' 出 token，每条只翻这一次）。');
+      translating = false;
+      if (r.notes && c.S.ticker === t) use(r.notes); else render();
+    } catch (e) { translating = false; render(); }
+  }
   const onState = () => { if (!fresh()) fetch(); else render(); };
 
   // ---------- 图上：每根有备注的 K 线，底部一个小方块 ----------
@@ -71,7 +87,7 @@ window.FENotes = (() => {
     hit.rows.slice(0, 6).forEach(r => {
       const row = el('div', 'nt-row');
       const tag = el('i', '', data.kinds[r.kind] || r.kind); tag.style.background = (KIND[r.kind] || KIND.news)[1];
-      row.appendChild(tag); row.appendChild(el('span', '', r.title + (r.source && !r.fact ? '（' + r.source + '）' : '')));
+      row.appendChild(tag); row.appendChild(el('span', '', zh(r) + (r.source && !r.fact ? '（' + r.source + '）' : '')));
       tip.appendChild(row);
     });
     if (hit.rows.length > 6) tip.appendChild(el('div', 'muted', '还有 ' + (hit.rows.length - 6) + ' 条，点一下看全部'));
@@ -98,7 +114,8 @@ window.FENotes = (() => {
       const tag = el('i', '', data.kinds[r.kind] || r.kind); tag.style.background = (KIND[r.kind] || KIND.news)[1];
       d.appendChild(tag);
       const mid = el('div', 'mid');
-      mid.appendChild(el('b', '', r.title));
+      mid.appendChild(el('b', '', zh(r)));
+      if (r.title_zh) mid.appendChild(el('small', 'muted orig', '原文：' + r.title));
       const src = el('small', 'muted', (r.fact ? '事实 · ' : r.kind === 'manual' ? '' : '媒体或搜索的说法 · ') + (r.source || '') + (r.date !== date ? ' · 发生在 ' + r.date + '（休市，记在下一个交易日）' : '') + ' · 记于 ' + String(r.fetched_at || '').slice(0, 16));
       mid.appendChild(src);
       const u = safeUrl(r.url);
@@ -159,6 +176,19 @@ window.FENotes = (() => {
     } else row('AI 解读', nar ? '现在显示的是模板版，不含新闻' : '还没有');
     row('事件日历', f.events_fetched_at ? (f.events_source + '，更新于 ' + f.events_fetched_at.slice(0, 16) + (f.events_stale ? ' · 超过 7 天没更新，可能过时' : '')) : '还没取过，点一次“刷新数据”', f.events_stale ? 'warn' : '');
     row('新闻存档', f.news_since ? '从 ' + f.news_since + ' 起每次刷新存一批标题；更早的日子只有联网查过或手写的才有' : '还没开始存');
+    if (f.headlines) row('标题翻译', translating ? '正在把英文标题翻成中文…' : f.headlines_zh + ' / ' + f.headlines + ' 条已翻成中文' +
+      (f.untranslated ? (c.aiEnabled() ? '，其余稍后自动翻' : '；没有 API 密钥，其余保持英文') : ''), f.untranslated && !c.aiEnabled() ? 'warn' : '');
+    if (data.pending && data.pending.length) {          // 最后一根 K 线之后的消息：还没有 K 线可挂，先列在这里
+      const dt = el('details', 'fr-pending');
+      dt.appendChild(el('summary', '', '最后一根 K 线之后的消息（' + data.pending.length + ' 条，等新 K 线出来再挂到图上）'));
+      data.pending.forEach(r => {
+        const u = safeUrl(r.url), a = el(u ? 'a' : 'span', '', md(r.date) + ' ' + zh(r));
+        if (u) { a.href = u; a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+        a.title = (r.title_zh ? '原文：' + r.title + '\n' : '') + (r.source || '');
+        dt.appendChild(a);
+      });
+      box.appendChild(dt);
+    }
     if (data.upcoming) row('下次财报', data.upcoming.date + (data.upcoming.days_left <= 0 ? '（今天）' : data.upcoming.days_left === 1 ? '（明天）' : '（还有 ' + data.upcoming.days_left + ' 天）') + '：临近财报，眼前的形态随时可能作废', 'hot');
     const todo = data.notable.filter(r => !r.searched);
     box.appendChild(el('div', 'fr-sub', '最近 60 根里动静最大的几天'));
@@ -195,7 +225,7 @@ window.FENotes = (() => {
     const out = [];
     [...days].sort().forEach(d => (data.by_date[d] || []).forEach(r => {
       if (!(r.fact || r.kind === 'manual' || r.kind === 'search')) return;
-      out.push({ id: r.id, date: d, fact: !!r.fact, text: md(d) + ' ' + (r.kind === 'manual' ? '你记的：' : '') + r.title });
+      out.push({ id: r.id, date: d, fact: !!r.fact, text: md(d) + ' ' + (r.kind === 'manual' ? '你记的：' : '') + zh(r) });
     }));
     return out;
   }

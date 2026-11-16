@@ -10,6 +10,7 @@ GET  /api/ai/cached?ticker=&asof=        这只标的这一天上次的 Claude �
 GET  /api/live?ticker=      盘中实时价和今天常规时段的未收盘 K 线（只画图，不参与判定）
 GET  /api/notes?ticker=&asof=           K 线上的备注（事件日、新闻标题、联网搜到的、手写的）和各自的时效
 POST /api/notes/manual | /delete | /search   手写一条、删一条、让 Claude 联网查某几天（会计费，查过的不再查）
+POST /api/notes/translate   把存档里的英文新闻标题翻成中文并存下来（每条只翻一次）
 GET  /api/learn?ticker=&model=&asof=    「一键解释」学习面板：大白话讲这一天屏幕上的每样东西（程序拼的，不调用 AI）
 GET  /api/quant?ticker=&model=houshou|four&asof=   「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发
 POST /api/quant/narrate     这份结果的解说：模板（免费）或 Claude（body.claude 为真）
@@ -101,7 +102,7 @@ def run_refresh():
 def meta():
     ok, why = ai_explain.status(CFG)
     return dict(tickers=panel.summary(), timeframe='日线', realtime=False,
-                ai=dict(enabled=ok, reason=why, model=CFG['ai_model']),
+                ai=dict(enabled=ok, reason=why, model=CFG['ai_model'], translate_auto=bool(CFG.get('ai_translate_auto', True))),
                 backtest=panel.backtest_summary(), last_refresh=_last_refresh, last_refresh_file=panel.last_refresh(),
                 portfolio_poll_s=max(5, min(60, int(CFG.get('portfolio_poll_s', 15)))),
                 engine=dict(version='v1.0', params=panel.P, fixed={k: panel.F[k] for k in ('hi_win', 'div_gap', 'tgt_win', 'max_hold')}))
@@ -285,6 +286,25 @@ def notes_search(body):
         _ai_lock.release()
 
 
+def notes_translate(body):
+    """把这只标的还没有中文的新闻标题翻一遍，存下来。每条只翻一次；没有要翻的就什么都不调用。"""
+    t = body.get('ticker', '')
+    rows = notes.pending_translation(t)
+    if not rows:
+        return 200, dict(ok=True, translated=0, skipped=True, notes=notes.payload(t, body.get('asof') or None))
+    if not _ai_lock.acquire(blocking=False):
+        return 409, dict(ok=False, error='上一次 AI 请求还没结束。')
+    try:
+        got = ai_explain.translate_titles([r['title'] for r in rows], CFG)
+        if not got.get('ok'):
+            return 200, dict(ok=False, error=got['error'], code=got.get('code'))
+        done = notes.store_translation(t, [r['id'] for r in rows], got['zh'], dict(model=got['model']))
+        return 200, dict(ok=True, translated=done, asked=len(rows), model=got['model'], tokens_in=got['tokens_in'], tokens_out=got['tokens_out'],
+                         notes=notes.payload(t, body.get('asof') or None))
+    finally:
+        _ai_lock.release()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'FourEvidence/1.0'
     protocol_version = 'HTTP/1.1'
@@ -403,6 +423,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dict(ok=True, removed=notes.delete(t, body.get('id', '')), notes=notes.payload(t, body.get('asof') or None)))
             if u.path == '/api/notes/search':
                 return self._send(*notes_search(body))
+            if u.path == '/api/notes/translate':
+                return self._send(*notes_translate(body))
             if u.path == '/api/quant/anchor':         # 手动成本锚点：date 为空就是清除，回到自动
                 t = body.get('ticker', '')
                 return self._send(200, dict(ok=True, ticker=t, anchor=quant.set_anchor(t, body.get('date') or None)))

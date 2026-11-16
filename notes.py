@@ -189,6 +189,37 @@ def delete(t, item_id):
         return n - len(x['items'])
 
 
+# ---------- 英文标题翻成中文（zaki 11-16：备注要是中文的）----------
+
+def pending_translation(t, limit=40):
+    """Archived headlines that have no Chinese version yet (newest first). Each headline is translated once and stored."""
+    x = load(t)
+    rows = [i for i in x['items'] if i['kind'] == 'news' and not i.get('title_zh') and not i.get('zh_failed') and re.search(r'[A-Za-z]{3}', i.get('title') or '')]
+    rows.sort(key=lambda i: i['date'], reverse=True)
+    return rows[:limit]
+
+
+def store_translation(t, ids, zh, meta, now=None):
+    """Keep a translation only if it lines up with its headline and actually is Chinese; otherwise the English stays (and is not retried)."""
+    ok = isinstance(zh, list) and len(zh) == len(ids)
+    with _lock:
+        x = load(t)
+        by = {i['id']: i for i in x['items']}
+        done = 0
+        for k, item_id in enumerate(ids):
+            it = by.get(item_id)
+            if it is None:
+                continue
+            text = str(zh[k]).strip() if ok and isinstance(zh[k], str) else ''
+            if text and re.search(r'[\u4e00-\u9fff]', text) and len(text) <= 200:
+                it.update(title_zh=text, translated_at=now_text(now), translated_by=meta.get('model'))
+                done += 1
+            else:
+                it['zh_failed'] = True
+        save(t, x)
+    return done
+
+
 # ---------- reading ----------
 
 def bar_date(days, date):
@@ -248,10 +279,15 @@ def payload(t, asof=None, now=None):
     age = None
     if fa:
         age = (time.mktime(time.localtime(now)) - time.mktime(time.strptime(fa, '%Y-%m-%d %H:%M:%S'))) / 86400
+    # 最后一根 K 线之后的消息（比如今天还没收盘）：没有 K 线可挂，单独列出来。只在看最新一根时给
+    pending = sorted((it for it in x['items'] if it['date'] > days[-1]), key=lambda r: (r['date'], r.get('fetched_at') or ''), reverse=True)[:20] if latest else []
+    news = [it for it in x['items'] if it['kind'] == 'news' and (it['date'] <= cut or latest)]
     fresh = dict(events_fetched_at=fa, events_source=x['events']['source'], events_stale=bool(fa is None or age > EVENTS_STALE_DAYS),
+                 headlines=len(news), headlines_zh=sum(1 for it in news if it.get('title_zh')),
+                 untranslated=sum(1 for it in news if not it.get('title_zh') and not it.get('zh_failed') and re.search(r'[A-Za-z]{3}', it.get('title') or '')),
                  events_age_days=None if age is None else round(age, 1), news_since=x.get('news_since'),
                  searched_days=sorted(d for d in x['searched'] if d <= cut), counts=dict(events=sum(1 for v in by.values() for r in v if r['fact']), notes=n))
-    return dict(ok=True, ticker=t, asof=cut, is_latest=latest, by_date=by, upcoming=upcoming, freshness=fresh, kinds=KINDS,
+    return dict(ok=True, ticker=t, asof=cut, is_latest=latest, by_date=by, upcoming=upcoming, freshness=fresh, kinds=KINDS, pending=pending,
                 notable=[dict(r, searched=r['date'] in x['searched']) for r in notable_days(t, cut)])
 
 
@@ -261,7 +297,7 @@ def for_ai(t, asof, bars=60):
     days = panel.load(t)['B']['d']
     i = days.index(p['asof'])
     lo = days[max(0, i - bars + 1)]
-    rows = [dict(date=d, kind=KINDS.get(r['kind'], r['kind']), text=r['title'], source=r.get('source'), fact=bool(r.get('fact')))
+    rows = [dict(date=d, kind=KINDS.get(r['kind'], r['kind']), text=r.get('title_zh') or r['title'], source=r.get('source'), fact=bool(r.get('fact')))
             for d in sorted(p['by_date']) if d >= lo for r in p['by_date'][d]][-40:]
     f = p['freshness']
     return dict(notes=rows, next_earnings=p['upcoming'], events_updated=f['events_fetched_at'], events_may_be_stale=f['events_stale'],
