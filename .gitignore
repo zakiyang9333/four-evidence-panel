@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+logs/
+# 持仓是个人账户信息，只留在本机
+portfolio/
+tests/fixtures/
+screenshots/portfolio.png
+screenshots/04_portfolio_overlay_SPCX.png
+APP_ADDENDUM_PORTFOLIO.md
+# AI 解读里可能带仓位内容
+cache/
+# 别的线程放的检查截图，里面有持仓页
+screenshots/review_*/
+
+# 视频截图是别人的作品，不放进仓库
+ref/

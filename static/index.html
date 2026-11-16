@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>四要素观察面板</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="banner" role="note">未验证，仅观察。回测证据不足，不是买入建议。</div>
+
+<header id="topbar">
+  <div class="brand"><span class="logo">◆</span>四要素观察面板</div>
+  <div id="viewSeg" class="seg" aria-label="页面">
+    <button data-view="chart">图表</button>
+    <button data-view="portfolio">持仓</button>
+  </div>
+  <div id="tickers" class="seg" role="tablist" aria-label="标的"></div>
+  <div class="seg chart-only" id="tfSeg" aria-label="周期">
+    <button class="on" data-tf="D" title="日线：四要素按日线判定">日线</button>
+    <button data-tf="W" title="周线：由日线合成，只看走势；四要素仍按日线判定">周线</button>
+    <button disabled title="不做：规则只用收盘后的日线，没有盘中数据">60分</button>
+  </div>
+  <div class="menu chart-only" id="indMenu">
+    <button id="indBtn" aria-haspopup="true">指标 <span id="indCount"></span> ▾</button>
+    <div class="pop" id="indPop" hidden>
+      <label><input type="checkbox" data-ind="vol"> 成交量 VOL(5,10)</label>
+      <label><input type="checkbox" data-ind="macd"> MACD(12,26,9)</label>
+      <label><input type="checkbox" data-ind="marks"> 四要素标记 ▲1–4</label>
+      <hr>
+      <label title="只是显示，不影响四要素证据的判定"><input type="checkbox" data-ind="pf"> 持仓叠加（成本、行权价、归零线）</label>
+      <label title="离现价很远，打开会把图压扁"><input type="checkbox" data-ind="pfval"> 估值参考线</label>
+      <hr>
+      <label title="今天常规时段的未收盘 K 线，半透明；只画图，不参与四要素判定"><input type="checkbox" data-ind="live"> 盘中实时（半透明 = 未收盘）</label>
+    </div>
+  </div>
+  <button id="replayBtn" class="chart-only" title="把图截到历史某一天，按那天重算">◀◀ 回放</button>
+  <span class="spacer"></span>
+  <button id="pfChip" class="chip" hidden></button>
+  <span id="dataDate" class="chip chart-only" title="只有收盘后的日线，没有实时行情"></span>
+  <button id="dataWarn" class="chip warn chart-only" hidden></button>
+  <button id="refreshBtn" class="chart-only" title="运行 prep_data.py，只追加新日期">刷新数据</button>
+  <button id="aiBtn" class="primary chart-only">✦ AI 量化</button>
+</header>
+
+<div id="views">
+<main id="main">
+  <nav id="tools" aria-label="画线工具">
+    <button data-tool="cursor" title="光标：拖动、缩放、十字线（Esc）"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg><span>光标</span></button>
+    <button id="autoBtn" title="自动画：按引擎的高点、低点、地量日画出扇子、成本线、止损线"><svg viewBox="0 0 24 24"><path d="M4 5l16 5M4 5l16 9M4 5l16 13"/><circle cx="4" cy="5" r="1.6"/></svg><span>自动画</span></button>
+    <hr>
+    <button data-tool="fan" title="斐波那契速度阻力扇 0.382 / 0.5 / 0.618：先点高点，再点低点"><svg viewBox="0 0 24 24"><path d="M4 5l16 4M4 5l16 9M4 5l15 14"/></svg><span>扇形</span></button>
+    <button data-tool="avwap" title="锚定 VWAP：点一根 K 线作为起算日"><svg viewBox="0 0 24 24"><path d="M3 15c4-1 5-6 9-6s5 3 9 2"/><circle cx="6" cy="14" r="1.8"/></svg><span>锚定VWAP</span></button>
+    <button data-tool="hline" title="水平线：点一个价位"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><circle cx="12" cy="12" r="1.8"/></svg><span>水平线</span></button>
+    <button data-tool="arrow" title="箭头加文字：先点起点，再点箭头指向的位置"><svg viewBox="0 0 24 24"><path d="M5 19L18 6M18 6h-7M18 6v7"/></svg><span>箭头文字</span></button>
+    <hr>
+    <button id="delBtn" title="删除选中的手动画线（先在光标模式下点一下那条线，或按 Delete）"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></svg><span>删除</span></button>
+    <button id="clearBtn" title="清空这只标的的全部手动画线"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg><span>清空</span></button>
+  </nav>
+
+  <section id="stage">
+    <div id="chartwrap">
+      <div id="chart"></div>
+      <canvas id="overlay"></canvas>
+      <div id="legend" class="leg"></div>
+      <div id="legVol" class="leg sub" hidden></div>
+      <div id="legMacd" class="leg sub" hidden></div>
+      <div id="evidence"></div>
+      <div id="hint" hidden></div>
+      <form id="textBox" hidden><input id="textInput" maxlength="40" placeholder="标注文字，回车确定" autocomplete="off"></form>
+    </div>
+    <div id="replaybar" hidden>
+      <b>回放</b>
+      <button id="rpPrev" title="前一根（←）">◀</button>
+      <input id="rpRange" type="range" min="1" max="1" step="1" aria-label="回放日期">
+      <button id="rpNext" title="后一根（→）">▶</button>
+      <input id="rpDate" type="date" aria-label="跳到日期">
+      <span id="rpInfo"></span>
+      <button id="rpExit">回到最新</button>
+    </div>
+  </section>
+
+  <aside id="side" aria-label="AI 量化">
+    <div class="side-head">
+      <span class="dot"></span><b>AI 量化</b><span id="sideSub" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="sideClose" title="收起">✕</button>
+    </div>
+    <div class="side-body">
+      <div class="sec-title">✦ AI 解说 <span class="muted small" id="narrMeta"></span></div>
+      <div class="card narr" id="narrCard">
+        <div class="narr-actions">
+          <button id="aiRun" class="primary" disabled title="按视频的四问走一遍：量 → MACD → 扇子 → 成本线。模板版，不调用 API，不花钱">✦ AI 分析</button>
+          <button id="aiPolish" hidden>让 Claude 润色（会计费）</button>
+          <button id="aiSkip" hidden>跳过动画</button>
+        </div>
+        <div id="aiHint" class="muted small"></div>
+        <div id="narrNotice" class="narr-notice" hidden></div>
+        <div id="narr" hidden></div>
+      </div>
+
+      <div class="sec-title">◎ 规则模型信号</div>
+      <div id="sigCard" class="card"></div>
+      <div id="tiles" class="tiles"></div>
+      <div id="narrWatch" class="card thin" hidden></div>
+      <details id="basis" class="card thin"><summary>依据（引擎逐项输出）</summary><div id="basisBody"></div></details>
+      <div id="notes"></div>
+
+      <div class="sec-title">历史信号 <span class="muted small" id="sigCount"></span></div>
+      <div id="sigList" class="card thin"></div>
+
+      <div class="sec-title">回测</div>
+      <div id="btCard" class="card thin muted small"></div>
+      <div class="credit">图表组件：TradingView Lightweight Charts™（Apache 2.0，本地文件，不走网络）。数据是收盘后的日线，不接券商，不下单。</div>
+    </div>
+  </aside>
+</main>
+<section id="pfPage" hidden aria-label="持仓"></section>
+</div>
+
+<div id="modal" hidden><div class="modal-box"><div class="modal-head"><b id="modalTitle"></b><span class="spacer"></span><button id="modalClose">✕</button></div><div id="modalBody"></div></div></div>
+<div id="toast" hidden></div>
+
+<script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+<script src="/static/portfolio.js"></script>
+<script src="/static/narrate.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

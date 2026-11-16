@@ -1,0 +1,10 @@
+{
+  "_说明": "面板配置。端口也可以用环境变量 FE_PORT 临时改；模型也可以用 FE_AI_MODEL 临时改。API 密钥不放这里，只从环境变量 ANTHROPIC_API_KEY 读。",
+  "port": 8777,
+  "ai_model": "claude-fable-5-2",
+  "ai_effort": "medium",
+  "ai_max_tokens": 16000,
+  "ai_timeout_s": 300,
+  "ai_refusal_fallback": true,
+  "portfolio_poll_s": 15
+}

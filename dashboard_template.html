@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抄底四要素看板</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1f2328;--mut:#6b7280;--line:#e5e2da;--box:#f3f1ea;--acc:#1f5f8b;--up:#c0392b;--dn:#1e8e5a;--fan:#2a9d8f;--vw:#c77d0a;--stop:#7c3aed;--ok:#15803d;--no:#9ca3af;--warn:#9a3412;--warnbg:#fdecd8}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--fg:#e8e6e1;--mut:#9a9890;--line:#2e2d29;--box:#1f1f1c;--acc:#7fb3d9;--up:#e5645a;--dn:#3fb37f;--fan:#4fc3b5;--vw:#e9a23b;--stop:#a78bfa;--ok:#4ade80;--no:#52525b;--warn:#f5c9a6;--warnbg:#3a2412}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15.5px/1.6 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+main{max-width:960px;margin:0 auto;padding:24px 16px 60px}
+h1{font-size:23px;margin:0}h2{font-size:17px;margin:30px 0 8px;border-bottom:1px solid var(--line);padding-bottom:5px}
+.sub{color:var(--mut);font-size:13px}
+.warn{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:9px 13px;margin:12px 0;font-size:14px}
+.tabs{display:flex;gap:8px;margin:16px 0 10px;flex-wrap:wrap}
+.tab{flex:1;min-width:130px;border:1px solid var(--line);background:var(--box);color:var(--fg);border-radius:10px;padding:9px 12px;cursor:pointer;font:inherit;text-align:left}
+.tab.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+.tab b{font-size:17px}.tab .sc{float:right;font-weight:700}
+.dots{display:inline-flex;gap:4px;vertical-align:middle;margin-left:6px}.dot{width:10px;height:10px;border-radius:50%;background:var(--no)}.dot.on{background:var(--ok)}
+.verdict{border-left:4px solid var(--acc);background:var(--box);padding:10px 14px;margin:10px 0;font-weight:600}
+.ev{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:12px 0}
+.card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--box);font-size:13.5px}
+.card h3{margin:0 0 4px;font-size:14.5px;display:flex;align-items:center;gap:7px}
+.lamp{width:13px;height:13px;border-radius:50%;background:var(--no);flex:none}.lamp.on{background:var(--ok)}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px 14px;font-size:13.5px;margin:8px 0}
+.kv span{color:var(--mut)}
+svg{width:100%;height:auto;display:block}svg text{font-family:inherit;fill:var(--mut);font-size:11px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}td,th{border-bottom:1px solid var(--line);padding:5px 7px;text-align:right}td:first-child,th:first-child{text-align:left}th{color:var(--mut);font-weight:600}
+.leg td{text-align:left;vertical-align:top}.leg td:first-child{width:28px;font-weight:700;color:var(--acc)}
+details{margin:8px 0}summary{cursor:pointer;color:var(--acc)}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body><main>
+<h1>抄底四要素看板</h1>
+<div class="sub" id="meta"></div>
+<div class="warn"><b>未验证，仅观察。</b>这是把一段视频里的规则原样算出来的结果，不是买入建议。回测结论是“证据不足”（见页面下方）。估值决定买不买，这里只描述价格状态。</div>
+<div class="tabs" id="tabs"></div>
+<div id="panel"></div>
+
+<h2>图例（编号对应图上标注）</h2>
+<table class="leg">
+<tr><td>①</td><td><b>高点</b>：最近 250 个交易日里的最高价。下跌从这里算起。就像量身高要先找到头顶。</td></tr>
+<tr><td>②</td><td><b>低点</b>：从高点以来的最低价。止损线和扇子都靠它定位。</td></tr>
+<tr><td>③</td><td><b>扇子（三条青线，实线是中线）</b>：从高点往低点方向画的三条斜线，代表“下跌的速度”。价格重新站到中线上面，说明下坡变缓了。</td></tr>
+<tr><td>④</td><td><b>成本线（橙色）</b>：从“地量”那天起，所有成交的平均价格。站回它，说明在最冷清时买入的人不亏了。</td></tr>
+<tr><td>⑤</td><td><b>止损线（紫色虚线）</b>：低点再往下 3%。收盘跌破它，这次抄底就算错了。</td></tr>
+<tr><td>量</td><td>成交量柱；<b>蓝色柱</b>是“地量”日（当天成交量是最近 60 天里最少的），表示卖的人快没了。</td></tr>
+<tr><td>MACD</td><td>柱子代表涨跌的力度。价格创新低但绿柱比上次短，叫“底背离”：还在跌，但没那么用力了。</td></tr>
+<tr><td>颜色</td><td>红色是上涨，绿色是下跌（和视频、国内软件一致）。</td></tr>
+</table>
+
+<h2>回测结果（NVDA + QQQ + SPCX，视频原参数）</h2>
+<div id="bt"></div>
+
+<h2>规则</h2>
+<div class="sub">四项同时成立的那个收盘发信号，次日开盘用限价单买入（视频：先上半仓）。止损 = 低点下 3%（收盘跌破，次日开盘卖）。目标 = 低点前 20 根K线的最高价。最长持有 60 根K线。成本：每边 1 美元 + 0.1% 滑点。视频没明说的参数（250 日高点、放量 1.5 倍、背离间隔 5 根、目标窗口 20 根、60 根时间出场、跌幅 20% 门槛）是估算值。</div>
+</main>
+<script>
+const D=/*__DATA__*/null;
+const $=(s,p=document)=>p.querySelector(s);
+const el=(t,a={},h='')=>{const e=document.createElementNS('http://www.w3.org/2000/svg',t);for(const k in a)e.setAttribute(k,a[k]);if(h)e.textContent=h;return e};
+let cur=0;
+function fmt(x,d=2){return x==null?'—':Number(x).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d})}
+function tabs(){const T=$('#tabs');T.innerHTML='';D.tickers.forEach((t,i)=>{const b=document.createElement('button');b.className='tab'+(i===cur?' on':'');
+ const chg=(t.close/t.prev_close-1)*100;
+ b.innerHTML=`<b>${t.ticker}</b><span class="sc">${t.armed?t.score+'/4':'未触发'}</span><br><span class="sub">${fmt(t.close)} (${chg>=0?'+':''}${chg.toFixed(2)}%)</span><span class="dots">${t.evidence.map(e=>`<i class="dot${e.ok&&t.armed?' on':''}"></i>`).join('')}</span>`;
+ b.onclick=()=>{cur=i;tabs();panel()};T.appendChild(b)})}
+function verdict(t){
+ if(!t.armed) return `从高点最多跌了 ${t.drawdown_low}%，没到 20% 的门槛，系统不找底。当前状态：不适用。`;
+ if(t.all4) return `四项证据都成立（4/4）。按视频规则这是信号；回测证据不足，仅作观察。止损参考 ${fmt(t.stop)}。`;
+ const miss=t.evidence.filter(e=>!e.ok).map(e=>e.name).join('、');
+ return `${t.score}/4，还缺：${miss}。按视频规则：不抄底。`}
+function panel(){const t=D.tickers[cur],P=$('#panel');
+ P.innerHTML=`<div class="verdict">${t.ticker} · ${t.asof} 收盘 ${fmt(t.close)}：${verdict(t)}</div>
+ ${t.notes.map(n=>`<div class="warn">${n}</div>`).join('')}
+ <div class="ev">${t.evidence.map((e,i)=>`<div class="card"><h3><i class="lamp${e.ok?' on':''}"></i>证据${i+1} ${e.name}</h3>${e.text}</div>`).join('')}</div>
+ <div class="kv"><div><span>① 高点</span> ${fmt(t.high.price)}（${t.high.date}）</div><div><span>② 低点</span> ${fmt(t.low.price)}（${t.low.date}）</div>
+ <div><span>收盘距高点</span> −${t.drawdown_close}%</div><div><span>③ 扇子中线</span> ${fmt(t.fan05)}</div><div><span>④ 成本线</span> ${fmt(t.avwap)}</div><div><span>⑤ 止损线</span> ${fmt(t.stop)}</div>
+ <div><span>目标参考</span> ${fmt(t.target)}</div><div><span>上次完整信号</span> ${t.last_signal?t.last_signal.sig+'（'+t.last_signal.r+'R）':'无'}</div></div>
+ <div id="chart"></div>`;
+ chart(t)}
+function chart(t){const c=t.chart,n=c.d.length,W=940,m={l:8,r:58},pw=W-m.l-m.r,bw=pw/n;
+ const H1=330,H2=80,H3=100,g=18,HT=H1+H2+H3+g*2+22;
+ const svg=el('svg',{viewBox:`0 0 ${W} ${HT}`,role:'img','aria-label':t.ticker+' 日K'});
+ const cs=k=>getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+ const x=i=>m.l+bw*(i+.5);
+ let lo=Math.min(...c.l),hi=Math.max(...c.h);[t.stop,t.avwap].forEach(v=>{if(v!=null&&v>lo*0.8&&v<hi*1.2){lo=Math.min(lo,v);hi=Math.max(hi,v)}});
+ const pad=(hi-lo)*.05;lo-=pad;hi+=pad;const y=v=>H1-(v-lo)/(hi-lo)*H1;
+ const cp=el('clipPath',{id:'cp'});cp.appendChild(el('rect',{x:m.l,y:0,width:pw,height:H1}));svg.appendChild(cp);
+ for(let k=0;k<=4;k++){const v=lo+(hi-lo)*k/4;svg.appendChild(el('line',{x1:m.l,x2:m.l+pw,y1:y(v),y2:y(v),stroke:cs('--line')}));svg.appendChild(el('text',{x:m.l+pw+5,y:y(v)+4},fmt(v)))}
+ const G=el('g',{'clip-path':'url(#cp)'});svg.appendChild(G);
+ const line=(arr,col,w,dash)=>{let d='',pen=false;arr.forEach((v,i)=>{if(v==null){pen=false;return}d+=(pen?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1);pen=true});if(d)G.appendChild(el('path',{d,fill:'none',stroke:col,'stroke-width':w,'stroke-dasharray':dash||''}))};
+ for(const k in c.fans)line(c.fans[k],cs('--fan'),k==='0.5'?1.8:1,k==='0.5'?'':'4 4');
+ line(c.avwap,cs('--vw'),2);
+ if(t.stop!=null)G.appendChild(el('line',{x1:m.l,x2:m.l+pw,y1:y(t.stop),y2:y(t.stop),stroke:cs('--stop'),'stroke-width':1.5,'stroke-dasharray':'6 4'}));
+ for(let i=0;i<n;i++){const up=c.c[i]>=c.o[i],col=cs(up?'--up':'--dn');
+  G.appendChild(el('line',{x1:x(i),x2:x(i),y1:y(c.h[i]),y2:y(c.l[i]),stroke:col,'stroke-width':1}));
+  const a=y(Math.max(c.o[i],c.c[i])),b=y(Math.min(c.o[i],c.c[i]));G.appendChild(el('rect',{x:x(i)-bw*.35,y:a,width:bw*.7,height:Math.max(1,b-a),fill:col}))}
+ const tag=(i,v,s,dy)=>{if(i==null||i<0||i>=n)return;const yy=Math.min(H1-4,Math.max(13,y(v)+dy));svg.appendChild(el('text',{x:x(i),y:yy,'text-anchor':'middle',style:`fill:${cs('--acc')};font-weight:700;font-size:14px`},s))};
+ tag(c.hi,c.h[c.hi]??t.high.price,'①',-6);tag(c.lo,c.l[c.lo]??t.low.price,'②',16);
+ const lastIdx=a=>{for(let i=a.length-1;i>=0;i--)if(a[i]!=null&&a[i]>lo&&a[i]<hi)return i;return null};
+ const fi=c.fans['0.5']?lastIdx(c.fans['0.5']):null;if(fi!=null)tag(Math.max(2,fi-3),c.fans['0.5'][fi],'③',-6);
+ const ai=lastIdx(c.avwap);if(ai!=null)tag(Math.max(2,ai-8),c.avwap[ai],'④',-6);
+ if(t.stop!=null&&t.stop>lo)svg.appendChild(el('text',{x:m.l+14,y:y(t.stop)-5,style:`fill:${cs('--acc')};font-weight:700;font-size:14px`},'⑤'));
+ // volume
+ const y2=H1+g,vm=Math.max(...c.v);svg.appendChild(el('text',{x:m.l+2,y:y2+11},'成交量（蓝 = 地量日）'));
+ for(let i=0;i<n;i++){const h=c.v[i]/vm*(H2-14);svg.appendChild(el('rect',{x:x(i)-bw*.35,y:y2+H2-h,width:bw*.7,height:h,fill:c.lowvol[i]?cs('--acc'):cs(c.c[i]>=c.o[i]?'--up':'--dn'),opacity:c.lowvol[i]?1:.55}))}
+ // macd
+ const y3=y2+H2+g,mm=Math.max(...c.hist.map(Math.abs),...c.dif.map(Math.abs),...c.dea.map(Math.abs))||1,ym=v=>y3+H3/2-v/mm*(H3/2-10);
+ svg.appendChild(el('text',{x:m.l+2,y:y3+11},'MACD (12,26,9)'));svg.appendChild(el('line',{x1:m.l,x2:m.l+pw,y1:ym(0),y2:ym(0),stroke:cs('--line')}));
+ for(let i=0;i<n;i++){const v=c.hist[i],a=ym(Math.max(v,0)),b=ym(Math.min(v,0));svg.appendChild(el('rect',{x:x(i)-bw*.3,y:a,width:bw*.6,height:Math.max(.5,b-a),fill:cs(v>=0?'--up':'--dn')}))}
+ const l2=(arr,col)=>svg.appendChild(el('path',{d:arr.map((v,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+ym(v).toFixed(1)).join(''),fill:'none',stroke:col,'stroke-width':1.2}));l2(c.dif,cs('--fg'));l2(c.dea,cs('--vw'));
+ let lastM='';c.d.forEach((d,i)=>{const mth=d.slice(0,7);if(mth!==lastM){lastM=mth;if(i>2)svg.appendChild(el('text',{x:x(i),y:HT-6,'text-anchor':'middle'},d.slice(2,7)))}});
+ $('#chart').appendChild(svg)}
+function bt(){const b=D.backtest,r=(s,name)=>`<tr><td>${name}</td><td>${s.n}</td><td>${s.n?Math.round(s.win*100)+'%':'—'}</td><td>${s.n?s.mean_r:'—'}</td><td>${s.ci90_mean_r?s.ci90_mean_r.join(' ~ '):'—'}</td><td>${s.n?s.max_losing_streak:'—'}</td><td>${s.n?s.max_dd_r+'R':'—'}</td><td>${s.vs_random_dip_buying?s.vs_random_dip_buying.control_mean_r:'—'}</td><td>${s.vs_random_dip_buying?s.vs_random_dip_buying.p:'—'}</td></tr>`;
+ const bh=b.buyhold,g=b.grid;
+ $('#bt').innerHTML=`<div class="verdict">结论：证据不足。27 年里三只标的合计只有 ${b.all.n} 笔交易（少于 30 笔），样本外只有 ${b.oos.n} 笔；平均每笔 ${b.all.mean_r}R，但和“跌够 20% 后随便挑一天买”的对照组相比不显著（p = ${b.all.vs_random_dip_buying.p}）。按项目规则：不交易，只作观察。</div>
+ <div class="scroll"><table><tr><th>样本</th><th>笔数</th><th>胜率</th><th>平均 R</th><th>90% 区间</th><th>最长连亏</th><th>最大回撤</th><th>对照组平均 R</th><th>p 值</th></tr>
+ ${r(b.all,'全部')}${r(b.is_,'样本内（前 60%）')}${r(b.oos,'样本外（后 40%）')}</table></div>
+ <p class="sub">R = 以“入场价 − 止损价”为 1 个单位的盈亏，已扣成本。对照组：在已经从 250 日高点跌超 20% 的任意一天买入，用同样的止损、目标和持有期，抽样 5,000 次。p 值是对照组不比它差的概率，小于 0.05 才算显著。</p>
+ <div class="scroll"><table><tr><th>标的</th><th>笔数</th><th>胜率</th><th>平均 R</th><th>对照组平均 R</th><th>持仓时间占比</th><th>策略年化（满仓）</th><th>买入持有年化</th></tr>
+ ${Object.keys(b.by_ticker).map(k=>{const s=b.by_ticker[k],h=bh[k];return `<tr><td>${k}（${h.years} 年）</td><td>${s.n}</td><td>${s.n?Math.round(s.win*100)+'%':'—'}</td><td>${s.n?s.mean_r:'—'}</td><td>${s.control_mean_r??'—'}</td><td>${(h.time_in_market*100).toFixed(1)}%</td><td>${(h.strat_cagr_full_size*100).toFixed(1)}%</td><td>${(h.bh_cagr*100).toFixed(1)}%</td></tr>`}).join('')}</table></div>
+ <p class="sub">参数网格（次要检验）：${g.cells} 组参数里，样本内最好的一组在样本外 ${g.best_in_sample.oos.n} 笔、平均 ${g.best_in_sample.oos.mean_r}R，p = ${g.best_in_sample.p_oos}，Bonferroni 校正后 p = ${g.bonferroni_p_oos}；${g.cells_oos_tested} 组里样本外 p &lt; 0.05 的有 ${g.cells_oos_p_lt_05} 组。NVDA 是 27 年涨了几千倍的幸存者，任何“买入”规则在它身上都好看，所以要看对照组而不是看绝对收益。</p>
+ <details><summary>全部 ${b.all.n} 笔交易</summary><div class="scroll"><table><tr><th>标的</th><th>信号日</th><th>入场</th><th>止损</th><th>目标</th><th>出场日</th><th>出场价</th><th>原因</th><th>R</th><th>持有</th></tr>
+ ${Object.keys(b.trades).map(k=>b.trades[k].map(q=>`<tr><td>${k}</td><td>${q.sig}</td><td>${q.entry}</td><td>${q.stop}</td><td>${q.target??'—'}</td><td>${q.exit_d}</td><td>${q.exit}</td><td>${{target:'到目标',stop:'止损',time:'到期',open:'未平'}[q.why]||q.why}</td><td>${q.r}</td><td>${q.bars}</td></tr>`).join('')).join('')}</table></div>
+ <p class="sub">NVDA、QQQ 的价格是拆股调整后的价格。</p></details>`}
+$('#meta').textContent=`规则来源：视频“地球顶之后的腰斩”（抄底核心四要素）· 数据截至 ${D.tickers.map(t=>t.ticker+' '+t.asof).join('，')} · 生成于 ${D.generated}`;
+tabs();panel();bt();
+</script>
+</body></html>
