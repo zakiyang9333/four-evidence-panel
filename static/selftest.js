@@ -139,8 +139,12 @@
     ok('draw_is_animated', alphaAt(S.asof - 20, lvl) === 0, alphaAt(S.asof - 20, lvl));        // 第三个标记（价位线）刚点下去时还没开始画
     await sleep(4000); await frame();
     ok('draw_finished_on_chart', alphaAt(i1, bb.l[i1]) > 0 && alphaAt(S.asof - 20, lvl) > 0 && alphaAt(i2, bb.h[i2]) > 0, [alphaAt(i1, bb.l[i1]), alphaAt(S.asof - 20, lvl), alphaAt(i2, bb.h[i2])]);
+    // 记忆：已有 Claude 的解说、盘面没变时点“重新分析”，第一下只是问一句，不调用 API（这里只点一下，不会计费）
+    const kept = N.current(); N.polish(false); await frame();
+    ok('reanalyze_asks_before_spending', N.current() === kept && /再点一次确认/.test($('#aiPolish').textContent) && $('#aiPolish').classList.contains('arm') && /已存在本机/.test($('#aiHint').textContent) === S.meta.ai.enabled,
+      [$('#aiPolish').textContent, $('#aiHint').textContent]);
     N.reset(); await frame();
-    ok('narr_reset_clears_highlight', !S.flash && $('#narr').hidden);
+    ok('narr_reset_clears_highlight', !S.flash && $('#narr').hidden && !$('#aiPolish').classList.contains('arm'));
     $('#aiRun').click(); await until(() => $('#narr .n-final.show'), 9000);
     out.info.ai = { enabled: S.meta.ai.enabled, polishDisabled: $('#aiPolish').disabled, hidden: $('#aiPolish').hidden, hint: $('#aiHint').textContent };
     ok('polish_button_matches_key', !$('#aiPolish').hidden && (S.meta.ai.enabled ? !$('#aiPolish').disabled : ($('#aiPolish').disabled && /ANTHROPIC_API_KEY/.test($('#aiHint').textContent))), out.info.ai);

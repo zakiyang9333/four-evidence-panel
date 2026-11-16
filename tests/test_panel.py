@@ -361,7 +361,7 @@ class WithKey(unittest.TestCase):
 
     def call(self):
         FakeClaude.seen.clear()
-        return http(self.s.port, '/api/ai/analyze', {'ticker': 'NVDA', 'asof': '2025-05-13'})
+        return http(self.s.port, '/api/ai/analyze', {'ticker': 'NVDA', 'asof': '2025-05-13', 'force': True})    # 每个用例都要真的调用一次
 
     def test_request_shape_and_key_stays_in_backend(self):
         FakeClaude.reject_fallbacks = False
@@ -454,16 +454,34 @@ class WithKey(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.s.cache, 'QQQ_2009-03-18.json')))
         self.assertFalse(os.path.exists(os.path.join(ROOT, 'cache', 'ai', 'QQQ_2009-03-18.json')))
         self.assertFalse(json.loads(http(self.s.port, '/api/ai/cached?ticker=QQQ&asof=2009-03-19')[1])['found'])
+        # 记忆：盘面没变再点分析，给回保存的那一版，不调用 API；明确带 force 才重新分析
+        again = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2009-03-18'})[1])
+        self.assertEqual(len(FakeClaude.seen), n)
+        self.assertEqual((again['reused'], again['cached'], again['same_input'], again['source']), (True, True, True, 'claude'))
+        self.assertEqual(again['narration'], res['entry']['narration'])
+        forced = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2009-03-18', 'force': True})[1])
+        self.assertEqual(len(FakeClaude.seen), n + 1)
+        self.assertNotIn('reused', forced)
+        # 状态里带着“这一天有没有保存过”，前端据此决定要不要直接显示
+        self.assertTrue(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-18')[1])['ai_saved'])
+        self.assertFalse(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-19')[1])['ai_saved'])
         self.assertEqual(http(self.s.port, '/api/ai/cached?ticker=XXXX&asof=2009-03-18')[0], 404)
 
-    def test_fingerprint_changes_with_positions_and_model(self):
-        import ai_explain
-        st = panel.state_at('SPCX', '2026-11-13'); bars = [['2026-11-13', 1, 1, 1, 1, 1]]; cfg = dict(ai_model='m1', ai_effort='medium')
+    def test_fingerprint_follows_market_and_positions_only(self):
+        """同一盘面、同一批仓位 = 同一份解读。换模型、改提示词、仓位文件重新同步、过了几天，都不算变。"""
+        import ai_explain, narrate
+        f = narrate.build_facts('SPCX', '2026-11-13'); bars = [['2026-11-13', 1, 1, 1, 1, 1]]; cfg = dict(ai_model='m1', ai_effort='medium')
         pos = dict(positions=[dict(symbol='SPCX', qty=1)], positions_asof='x', positions_stale=False)
-        a = ai_explain.fingerprint(st, bars, None, cfg)
-        self.assertEqual(a, ai_explain.fingerprint(st, bars, None, cfg))
-        self.assertNotEqual(a, ai_explain.fingerprint(st, bars, None, cfg, pos))
-        self.assertNotEqual(a, ai_explain.fingerprint(st, bars, None, dict(cfg, ai_model='m2')))
+        a = ai_explain.fingerprint(f, bars, None, cfg)
+        self.assertEqual(a, ai_explain.fingerprint(f, bars, None, cfg))
+        self.assertEqual(a, ai_explain.fingerprint(f, bars, None, dict(cfg, ai_model='m2', ai_effort='high')))
+        self.assertEqual(a, ai_explain.fingerprint(dict(f, notes=['K 线数据只到 2026-11-13，还差 2 个交易日没更新。']), bars, None, cfg))
+        self.assertNotEqual(a, ai_explain.fingerprint(f, [['2026-11-13', 1, 1, 1, 2, 1]], None, cfg))
+        self.assertNotEqual(a, ai_explain.fingerprint(dict(f, close=f['close'] + 1), bars, None, cfg))
+        b = ai_explain.fingerprint(f, bars, None, cfg, pos)
+        self.assertNotEqual(a, b)
+        self.assertEqual(b, ai_explain.fingerprint(f, bars, None, cfg, dict(pos, positions_asof='y', positions_stale=True)))
+        self.assertNotEqual(b, ai_explain.fingerprint(f, bars, None, cfg, dict(pos, positions=[dict(symbol='SPCX', qty=2)])))
 
 
 class Freshness(unittest.TestCase):

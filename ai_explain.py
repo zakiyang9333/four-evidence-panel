@@ -79,10 +79,15 @@ def build_input(facts, bars60, backtest, positions=None):
     return json.dumps(body, ensure_ascii=False, separators=(',', ':'))
 
 
-def fingerprint(facts, bars60, backtest, cfg, positions=None):
-    """Hash of exactly what would be sent (model + system prompt + input). Same hash = the saved reading still applies."""
-    raw = '\n'.join([cfg['ai_model'], str(cfg.get('ai_effort')), system_prompt(bool(positions)), build_input(facts, bars60, backtest, positions)])
-    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]
+def fingerprint(facts, bars60, backtest, cfg=None, positions=None):
+    """Hash of what a reading is about: the engine facts, the bars, the backtest summary and the relevant positions.
+    Same hash = the saved reading still applies, so no new call is needed.
+    Deliberately not in it: the model and the prompt wording (a reading of the same market stays a reading of it),
+    when the positions file was last synced, and the notes (one of them counts days since the last bar)."""
+    f = {k: v for k, v in facts.items() if k != 'notes'}
+    rows = (positions or {}).get('positions') or []
+    raw = json.dumps([f, bars60, backtest, rows], ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
+    return 'd2-' + hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]
 
 
 def polish(facts, bars60, backtest, cfg, positions=None):
@@ -123,7 +128,9 @@ def polish(facts, bars60, backtest, cfg, positions=None):
                 return dict(ok=False, code='refusal', error='模型拒绝了这次请求。')
             text = ''.join(b.text for b in msg.content if b.type == 'text').strip()
             try:
-                return dict(ok=True, raw=json.loads(text), model=msg.model, attempts=attempt)
+                u = getattr(msg, 'usage', None)
+                return dict(ok=True, raw=json.loads(text), model=msg.model, attempts=attempt,
+                            tokens_in=getattr(u, 'input_tokens', None), tokens_out=getattr(u, 'output_tokens', None))
             except ValueError:
                 continue
         return dict(ok=False, code='parse', error='Claude 两次返回的都不是合法 JSON。')

@@ -597,6 +597,7 @@ async function fetchState() {
     const nar = window.FENarrate.current();
     if (nar && (nar.ticker !== S.ticker || nar.asof !== st.asof)) window.FENarrate.reset();     // 解说对应的不是这一天了
     renderEvidence(); renderSide(); syncPriceLines();
+    window.FENarrate.restore();      // 这一天保存过 Claude 的解说就直接显示，不用再点、不再计费
     candle.applyOptions({ autoscaleInfoProvider: scaleProvider });
     S.rev++;
   } catch (e) { if (seq === S.seq) toast('取状态失败：' + e.message, true); }
@@ -1071,6 +1072,7 @@ function bind() {
   $('#sideClose').onclick = () => { S.sideOpen = false; store.set('side', false); renderTop(); syncUrl(); };
   window.FENarrate.init({
     api, toast, ticker: () => S.ticker, asof: () => asofDate(), ready: () => !!stateFresh(), flash: flashStep,
+    saved: () => !!(stateFresh() && S.state.ai_saved),
     fake: () => new URLSearchParams(location.search).get('aifake') === '1' || store.get('aifake', false),   // 测试开关：往 Claude 输出里塞假数字
     clearFlash,
     onReveal: n => { S.reveal = n; renderEvidence(); },      // 四问出到第几问，证据条就亮到第几条

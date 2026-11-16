@@ -12,7 +12,8 @@ GET  /api/portfolio         「持仓」页的全部内容（只读 portfolio/ �
 GET  /api/portfolio/version 持仓文件有没有变（前端每 15 秒问一次，变了才重取）
 GET  /api/portfolio/snapshot?name=   某一份 App 快照的原文
 POST /api/refresh           运行 prep_data.py（只追加新日期）
-POST /api/ai/analyze        Claude 解读（需要环境变量 ANTHROPIC_API_KEY）
+POST /api/ai/analyze        Claude 解说（需要环境变量 ANTHROPIC_API_KEY）。盘面和仓位没变时直接返回保存的那一版，
+                            不调用 API；带 force 才重新分析
 """
 import json
 import mimetypes
@@ -120,15 +121,21 @@ def ai_narrate(t, asof):
     res = narration_result(t, facts, bt, narrate.template(facts), 'template')
     rows = ai_cache_read(t, facts['asof'])
     if rows:
-        old = dict(rows[0], same_input=rows[0].get('fingerprint') == fp, cached=True)
-        bad = narrate.bad_numbers(old['narration'], narrate.allowed_numbers(facts, bars, bt, pos))    # 存下来的解说按现在的规则重新核对
-        old.pop('unverified', None); old.pop('notice', None)
-        if bad:
-            old.update(unverified=bad[:20], notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
-        res['polished'] = old
+        res['polished'] = saved_view(rows[0], facts, bars, bt, pos, fp)
     ok, why = ai_explain.status(CFG)
     res['polish'] = dict(enabled=ok, reason=why, model=CFG['ai_model'], positions=len(pos['positions']) if pos else 0)
     return res
+
+
+def saved_view(row, facts, bars, bt, pos, fp):
+    """A saved Claude reading as it is shown again: marked as saved, told whether the market or the positions changed since,
+    and its numbers checked again by today's rules. No API call."""
+    old = dict(row, same_input=row.get('fingerprint') == fp, cached=True)
+    bad = narrate.bad_numbers(old['narration'], narrate.allowed_numbers(facts, bars, bt, pos))
+    old.pop('unverified', None); old.pop('notice', None); old.pop('code', None)
+    if bad:
+        old.update(unverified=bad[:20], notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
+    return old
 
 
 # ---- 本机保存的 AI 解读（含仓位相关内容，只存在 cache/ai/，不进 git）----
@@ -175,6 +182,11 @@ def ai_analyze(body):
     t = body.get('ticker')
     facts, bars, bt, pos, fp = ai_inputs(t, body.get('asof'))
     tmpl = narrate.template(facts)
+    if not body.get('force') and not body.get('test_fake_number'):
+        # 记忆：盘面和仓位都没变，就把保存的那一版原样给回去，不再调用 Claude。要重新分析得明确带 force。
+        rows = ai_cache_read(t, facts['asof'])
+        if rows and rows[0].get('fingerprint') == fp:
+            return 200, dict(saved_view(rows[0], facts, bars, bt, pos, fp), reused=True)
     if not _ai_lock.acquire(blocking=False):
         return 409, dict(ok=False, error='上一次分析还没结束。')
     try:
@@ -192,7 +204,8 @@ def ai_analyze(body):
         if bad and CFG.get('ai_strict_numbers', False):     # 严格模式：有一个对不上就整段不用
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='AI 输出含无法核对的数字，已改用模板', code='numbers', unverified=bad[:8])
         res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], positions_sent=len(pos['positions']) if pos else 0,
-                               created_at=time.strftime('%Y-%m-%d %H:%M:%S'), fingerprint=fp)
+                               created_at=time.strftime('%Y-%m-%d %H:%M:%S'), fingerprint=fp,
+                               tokens_in=got.get('tokens_in'), tokens_out=got.get('tokens_out'))
         if bad:     # 自由分析时 Claude 会自己算数：对不上的不丢弃，标出来让人自己判断
             res.update(unverified=bad[:20], code='numbers',
                        notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
@@ -256,6 +269,7 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == '/api/state':
                     st = panel.state_at(q.get('ticker', ''), q.get('asof') or None)
                     st['card'] = narrate.card_from_state(st, panel.backtest_summary())     # 规则模型卡片：只来自引擎
+                    st['ai_saved'] = os.path.exists(_ai_cache_path(st['ticker'], st['asof']))   # 这一天有没有保存过 Claude 解说
                     return self._send(200, st)
                 if u.path == '/api/portfolio':
                     return self._send(200, portfolio.payload())
