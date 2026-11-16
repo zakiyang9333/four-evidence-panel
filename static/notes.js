@@ -179,7 +179,10 @@ window.FENotes = (() => {
     box.appendChild(el('p', 'fine', '图底部的小方块：财 = 财报日，息 = 除息，拆 = 拆股，闻 = 新闻标题，搜 = 联网搜到的，记 = 你写的。右键某根 K 线可以写备注。备注不参与任何规则判定。'));
   }
 
-  // 解说卡片：这一步在图上标了哪几天，那几天有什么备注
+  /* 解说卡片：这一步在图上标了哪几天，那几天有什么值得带一句的备注。
+     只带三种：事件日（财报、除息、拆股）、你自己写的、联网搜到并核对过链接的中文概括。
+     原始的新闻标题不带：它们又长又杂、多半是英文的大盘消息，放在卡片上只会干扰（zaki 11-16：“AI分析出现无用信息”）。
+     想看标题，图底部的小方块上悬停或点开就有。 */
   function forDraw(draw) {
     if (!fresh() || !draw || !draw.length) return [];
     const days = new Set();
@@ -190,8 +193,11 @@ window.FENotes = (() => {
       if (d.date_from && d.date_to) Object.keys(data.by_date).forEach(x => { if (x >= d.date_from && x <= d.date_to) days.add(x); });
     });
     const out = [];
-    [...days].sort().forEach(d => (data.by_date[d] || []).slice(0, 2).forEach(r => out.push({ date: d, text: md(d) + ' ' + (r.fact ? r.title : (data.kinds[r.kind] || '') + '：' + r.title), fact: !!r.fact })));
-    return out.slice(0, 3);
+    [...days].sort().forEach(d => (data.by_date[d] || []).forEach(r => {
+      if (!(r.fact || r.kind === 'manual' || r.kind === 'search')) return;
+      out.push({ id: r.id, date: d, fact: !!r.fact, text: md(d) + ' ' + (r.kind === 'manual' ? '你记的：' : '') + r.title });
+    }));
+    return out;
   }
 
   function menu(date, add) {      // 图上右键菜单里的两项
@@ -199,5 +205,5 @@ window.FENotes = (() => {
     add('让 Claude 联网查这一天（会计费）', () => search([date], () => openDay(date)), busy || !c.aiEnabled());
   }
 
-  return { init, reset, onState, draw, render, menu, forDraw, openDay, search, data: () => data, fresh };
+  return { init, reset, onState, draw, render, menu, forDraw, openDay, search, data: () => data, fresh, _use: use };
 })();

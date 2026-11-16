@@ -295,10 +295,20 @@
       // 解说卡片在图上标到这一天时，把这天的备注带在卡片上
       window.FENarrate.show({ ok: true, source: 'claude', ticker: S.ticker, asof: S.state.asof, model: 'selftest', polish: { enabled: false, reason: '', model: 'x' }, narration: { hook: '自检', story: '自检', final: '还不抄', watch: [],
         steps: [{ q: '那天', say: '这天有事', sticker: '', tone: 'neutral', evidence: 0, ok: null, draw: [{ type: 'point', date: day, price: S.bars.l[S.asof - 3], label: '坑' }] },
-          { q: '别的', say: '这步没标日期', sticker: '', tone: 'neutral', evidence: 0, ok: null, draw: [] }] } }, false);
+          { q: '别的', say: '这步也标了同一天', sticker: '', tone: 'neutral', evidence: 0, ok: null, draw: [{ type: 'volume', dates: [day], label: '量' }] }] } }, false);
       await frame();
       const nn = [...document.querySelectorAll('#narr .n-step')].map(li => (li.querySelector('.n-notes') || {}).textContent || '');
-      ok('notes_shown_on_ai_card', /自检写的一条/.test(nn[0]) && nn[1] === '' && /AI 解读/.test($('#noteCard').textContent), nn);
+      ok('notes_shown_on_ai_card_once', /自检写的一条/.test(nn[0]) && nn[1] === '' && /AI 解读/.test($('#noteCard').textContent), nn);      // 同一条备注不在两张卡片上重复
+      // 原始的新闻标题不上卡片（又长又杂），事件日和联网搜到的概括才上
+      const real = NF.data(), mix = JSON.parse(JSON.stringify(real));
+      mix.by_date[day] = [{ id: 'n1', kind: 'news', title: 'S&P 500, Dow, Nasdaq End Lower Amid Turmoil', fact: false }, { id: 'e1', kind: 'earnings', title: '财报日', fact: true },
+        { id: 's1', kind: 'search', title: '财报后下调指引', fact: false }];
+      NF._use(mix);
+      const fd = NF.forDraw([{ type: 'point', date: day, price: 1 }]).map(r => r.text);
+      ok('notes_no_raw_headlines_on_cards', fd.length === 2 && /财报日/.test(fd[0]) && /财报后下调指引/.test(fd[1]) && !fd.some(t => /S&P/.test(t)), fd);
+      const lines = [...document.querySelectorAll('#narr .n-notes span')];
+      ok('notes_on_cards_are_one_line_each', lines.length > 0 && lines.every(sp => getComputedStyle(sp).whiteSpace === 'nowrap' && sp.title === sp.textContent), lines.length);
+      NF._use(real);
       window.FENarrate.reset();
       const row = [...document.querySelectorAll('#modalBody .note-row')].find(r => /自检写的一条/.test(r.textContent));
       if (row) row.querySelector('button').click();

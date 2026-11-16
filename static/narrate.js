@@ -94,7 +94,7 @@ window.FENarrate = (() => {
   }
 
   function show(res, animate) {
-    clearTimeout(timer); clearTimeout(armed); armed = 0; cur = res; shown = 0; ctx.clearFlash();
+    clearTimeout(timer); clearTimeout(armed); armed = 0; cur = res; shown = 0; ctx.clearFlash(); notedIds = new Set();
     const n = res.narration, box = $('#narr');
     box.textContent = ''; box.hidden = false;
     box.appendChild(el('div', 'n-hook', n.hook));
@@ -152,16 +152,19 @@ window.FENarrate = (() => {
   }
 
   // 这一步在图上标的那几天，如果有备注（财报日、新闻、手写的），在卡片上带一行小字：让人知道当时发生过什么
+  // 每条备注只在第一张讲到那天的卡片上出现一次；每张卡片最多两条，每条一行，放不下就省略（悬停能看全）
+  let notedIds = new Set();
   function addNotes(li, s) {
     const old = li.querySelector('.n-notes'); if (old) old.remove();
-    const rows = window.FENotes ? window.FENotes.forDraw(s.draw) : [];
+    const rows = (window.FENotes ? window.FENotes.forDraw(s.draw) : []).filter(r => !notedIds.has(r.id)).slice(0, 2);
     if (!rows.length) return;
     const box = el('div', 'n-notes');
-    rows.forEach(r => box.appendChild(el('span', r.fact ? 'fact' : '', r.text)));
+    rows.forEach(r => { notedIds.add(r.id); const sp = el('span', r.fact ? 'fact' : '', r.text); sp.title = r.text; box.appendChild(sp); });
     li.querySelector('.mid').appendChild(box);
   }
   function renotes() {          // 备注后到（或刚加了一条）：把已经显示的卡片补上
     if (!cur) return;
+    notedIds = new Set();
     document.querySelectorAll('#narr .n-step').forEach(li => { const s = cur.narration.steps[Number(li.dataset.k)]; if (s) addNotes(li, s); });
     if (window.FENotes) window.FENotes.render();
   }

@@ -378,6 +378,6 @@ button.big:disabled{opacity:.6}
 .note-row a{color:var(--acc);font-size:12px;align-self:flex-start}
 .note-form{display:flex;gap:6px;margin:10px 0 8px}
 .note-form input{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;color:var(--fg);font:inherit}
-.n-notes{display:flex;flex-direction:column;gap:1px;margin-top:3px}
-.n-notes span{font-size:11px;line-height:1.4;color:#93c5fd}.n-notes span.fact{color:#fdba74}
+.n-notes{display:flex;flex-direction:column;gap:1px;margin-top:3px;min-width:0}
+.n-notes span{font-size:11px;line-height:1.4;color:#93c5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.n-notes span.fact{color:#fdba74}
 .n-notes span::before{content:"▸ "}
