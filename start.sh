@@ -1,6 +1,6 @@
 #!/bin/bash
 # 四要素交易面板：一条命令启动。  用法：./start.sh
-# 端口默认 8777（config.json 里改，或临时 FE_PORT=8778 ./start.sh）。
+# 端口默认 8777；被别的程序占用时自动换下一个空闲端口，实际地址会打印在终端里，并自动打开浏览器。
 # AI 解读需要先在 shell 里 export ANTHROPIC_API_KEY=...；不设也能用，只是那个按钮是灰的。
 set -u
 cd "$(dirname "$0")"
@@ -36,4 +36,5 @@ if [ ! -x "$PY" ] || ! "$PY" -c "import numpy" >/dev/null 2>&1; then
   "$PY" -c "import numpy" >/dev/null 2>&1 || { echo "缺少 numpy，装不上依赖也没有可用的系统 Python。"; exit 1; }
 fi
 
+[ -t 1 ] && export FE_OPEN=1      # 在终端里手动运行时，起来后自动打开浏览器
 exec "$PY" server.py

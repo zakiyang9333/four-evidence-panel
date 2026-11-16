@@ -12,6 +12,21 @@ PORT="${FE_PORT:-$(python3 -c "import json;print(json.load(open('config.json')).
 SERVICE="${FE_KEYCHAIN_SERVICE:-four-evidence-anthropic-key}"
 PREFIX="${FE_AGENT_PREFIX:-com.zaki.four-evidence}"
 
+# 端口被别的程序（不是这个面板）占着：换下一个空闲端口，记进 config.json，自动启动就固定用它
+port_owner_is_us() {
+  local pid; pid="$(lsof -nP -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1)"
+  [ -z "$pid" ] && return 0
+  [ "$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" = "$(pwd -P)" ] && ps -o command= -p "$pid" | grep -q 'server\.py'
+}
+if [ -z "${FE_PORT:-}" ] && ! port_owner_is_us "$PORT"; then
+  OLD="$PORT"
+  for P in $(seq "$PORT" $((PORT + 30))); do
+    lsof -nP -t -iTCP:"$P" -sTCP:LISTEN >/dev/null 2>&1 || { PORT="$P"; break; }
+  done
+  python3 -c "import json;p='config.json';c=json.load(open(p,encoding='utf-8'));c['port']=$PORT;json.dump(c,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=2)"
+  echo "✓ 端口 ${OLD} 被别的程序占用，面板改用 ${PORT}（已记进 config.json）。"
+fi
+
 if [ "${FE_KEY_FROM_STDIN:-}" = "1" ]; then KEY="$(cat)"; else KEY="$(pbpaste 2>/dev/null)"; fi
 KEY="$(printf '%s' "$KEY" | tr -d '[:space:]')"
 FROM=clipboard

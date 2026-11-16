@@ -303,15 +303,31 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    """Start on the configured port. When started by hand (no FE_PORT), a busy port is skipped: the next free one
+    up to +30 is used and printed, so the panel runs on any machine. launchd always passes FE_PORT (fixed port)."""
     port = int(CFG['port'])
-    try:
-        srv = ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    except OSError as e:
-        sys.exit(f'端口 {port} 起不来（{e}）。可能已有别的程序在用，请换一个：FE_PORT=8778 ./start.sh')
+    fixed = bool(os.environ.get('FE_PORT'))
+    srv = None
+    for p in ([port] if fixed else range(port, port + 31)):
+        try:
+            srv = ThreadingHTTPServer(('127.0.0.1', p), Handler)
+            port = p
+            break
+        except OSError as e:
+            err = e
+    if srv is None:
+        sys.exit(f'端口 {port} 起不来（{err}）。可能已有别的程序在用，换一个试试：FE_PORT=8800 ./start.sh' if fixed
+                 else f'{port}–{port + 30} 的端口都被占用了，换一个范围试试：FE_PORT=9800 ./start.sh')
+    if port != int(CFG['port']):
+        print(f'端口 {CFG["port"]} 被别的程序占用，改用 {port}。', flush=True)
     ok, why = ai_explain.status(CFG)
-    print(f'四要素面板已启动：http://localhost:{port}', flush=True)
+    url = f'http://localhost:{port}'
+    print(f'四要素面板已启动：{url}', flush=True)
     print(f'AI 解读：{"可用，模型 " + CFG["ai_model"] if ok else "不可用。" + why}', flush=True)
     threading.Thread(target=lambda: [panel.load(t) for t in panel.TICKERS], daemon=True).start()
+    if os.environ.get('FE_OPEN') == '1':                  # ./start.sh 在终端里运行时自动打开浏览器
+        import webbrowser
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
