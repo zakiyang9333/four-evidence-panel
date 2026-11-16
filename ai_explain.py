@@ -65,6 +65,15 @@ QUANT_RULES = """
 
 选的是后手模型时，steps 里的 evidence 一律写 0。后手清单三项全中时，结论最多说“条件齐了（未回测）”，不要说成可以入场；有核心仓时不要给价格止损。"""
 
+# 有「时效与备注」时追加的一段（zaki 11-16：想知道当时发生过什么）。
+NOTES_RULES = """
+
+输入里还有 context：K 线上的备注，告诉你某一天发生过什么。
+- notes：每条有日期、类别、内容、来源。fact 为真的是事件日（财报日、除息日、拆股日），可以当事实用；其余是媒体标题、联网搜到的摘要或使用者自己写的备注，只代表“有人这么说”。
+- next_earnings：下一次财报日和还有几天。财报临近时，要在解说里提一句，因为它会让眼前的形态随时作废。
+- coverage、news_archive_since、days_searched_online：说明哪些日子有记录。
+用法：某一步讲到的那几根 K 线如果有备注，就把它带上，说清是哪天、哪一类（例如“这天是财报日”“这天有报道说……”）。没有备注的日子，你不知道那天发生了什么：直接说不知道，不要猜原因，更不要编新闻。备注不改变规则引擎的任何结论。"""
+
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 
 
@@ -79,12 +88,14 @@ def status(cfg):
     return True, ''
 
 
-def system_prompt(with_positions, with_quant=False):
-    return SYSTEM + (QUANT_RULES if with_quant else '') + (PORTFOLIO_RULES if with_positions else '')
+def system_prompt(with_positions, with_quant=False, with_notes=False):
+    return SYSTEM + (QUANT_RULES if with_quant else '') + (NOTES_RULES if with_notes else '') + (PORTFOLIO_RULES if with_positions else '')
 
 
-def build_input(facts, bars60, backtest, positions=None, quant=None):
+def build_input(facts, bars60, backtest, positions=None, quant=None, notes=None):
     body = dict(facts)
+    if notes:
+        body['context'] = notes         # K 线上的备注：事件日、新闻标题、联网搜到的、手写的
     if quant:
         body['quant'] = quant           # 表盘、所选模型的清单结果、结构线：面板上已经显示的那些
     body['bars'] = dict(columns=['date', 'open', 'high', 'low', 'close', 'volume'], rows=bars60)
@@ -106,7 +117,7 @@ def fingerprint(facts, bars60, backtest, cfg=None, positions=None, extra=None):
     return 'd2-' + hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]
 
 
-def polish(facts, bars60, backtest, cfg, positions=None, quant=None):
+def polish(facts, bars60, backtest, cfg, positions=None, quant=None, notes=None):
     """Ask Claude for the JSON narration. Returns dict(ok, raw | error, model). Raises nothing."""
     ok, why = status(cfg)
     if not ok:
@@ -118,8 +129,8 @@ def polish(facts, bars60, backtest, cfg, positions=None, quant=None):
     out_cfg = {'format': {'type': 'json_schema', 'schema': narrate.SCHEMA}}       # 只允许按这个结构输出 JSON
     if cfg.get('ai_effort'):
         out_cfg['effort'] = cfg['ai_effort']
-    kw = dict(model=cfg['ai_model'], max_tokens=int(cfg.get('ai_max_tokens', 16000)), system=system_prompt(bool(positions), bool(quant)),
-              messages=[{'role': 'user', 'content': build_input(facts, bars60, backtest, positions, quant)}], output_config=out_cfg)
+    kw = dict(model=cfg['ai_model'], max_tokens=int(cfg.get('ai_max_tokens', 16000)), system=system_prompt(bool(positions), bool(quant), bool(notes)),
+              messages=[{'role': 'user', 'content': build_input(facts, bars60, backtest, positions, quant, notes)}], output_config=out_cfg)
 
     def run(with_fallback):
         if with_fallback:   # if the model declines, the API re-runs the request on its default fallback model
@@ -164,3 +175,60 @@ def polish(facts, bars60, backtest, cfg, positions=None, quant=None):
         return dict(ok=False, code='api', error=scrub(f'Claude API 返回错误（{e.status_code}），稍后再试。'))
     except anthropic.APIConnectionError:
         return dict(ok=False, code='network', error='连不上 Claude API，请检查网络。')
+
+
+# ---------- Claude 联网搜：某几天发生过什么 ----------
+
+SEARCH_SYSTEM = """你在帮一个看 K 线图的人查“那几天发生过什么”。用联网搜索，只报搜索结果里确实有的东西。
+
+每个日期最多给 3 条和这只标的股价直接相关、由可靠媒体或公司公告报道过的事（财报、指引、重大合同、监管、高管变动、行业或宏观的大消息）。
+搜不到就不给，不要猜，不要拿常识或推测来凑；宁可空着。
+
+最后只输出一个 JSON 对象，不要别的文字：
+{"items": [{"date": "YYYY-MM-DD", "what": "用你自己的话写一句中文概括，不超过 40 个字，不照抄原标题", "source": "媒体或机构名", "url": "搜索结果里这条的原始链接"}]}
+date 写事情发生或被报道的美东日期。url 必须是搜索结果里出现过的链接，原样照抄。"""
+
+
+def search_days(name, ticker, rows, cfg):
+    """One web-search request for a few days. rows = [{date, why}]. Returns dict(ok, message (the response as a dict) | error, model, tokens)."""
+    ok, why = status(cfg)
+    if not ok:
+        return dict(ok=False, error=why, code='disabled')
+    import anthropic
+    key = os.environ['ANTHROPIC_API_KEY'].strip()
+    scrub = lambda s: str(s).replace(key, '***')
+    client = anthropic.Anthropic(api_key=key, timeout=float(cfg.get('ai_timeout_s', 180)), max_retries=1)
+    ask = (f'标的：{name}（代码 {ticker}，美股）。请查下面这些交易日前后发生过什么：\n' +
+           '\n'.join(f"- {r['date']}：当天{r.get('why') or '走势异常'}" for r in rows))
+    # 用基础版搜索工具（web_search_20250305）而不是带“动态筛选”的 20260209：后者会先写代码去筛搜索结果，
+    # 2026-11-16 实测在次数上限内把代码跑崩了（Server tool use limit exceeded during code execution），最后交了空列表。
+    # 基础版把搜索结果直接给模型读，结果块里的链接也正好用来核对。要换回去改 config.json 的 ai_search_tool。
+    tools = [{'type': cfg.get('ai_search_tool', 'web_search_20250305'), 'name': 'web_search', 'max_uses': int(cfg.get('ai_search_max_uses', 1 + 2 * len(rows)))}]
+    kw = dict(model=cfg['ai_model'], max_tokens=int(cfg.get('ai_search_max_tokens', 12000)), system=SEARCH_SYSTEM, tools=tools,
+              output_config={'effort': cfg.get('ai_search_effort', 'low')})
+    messages = [{'role': 'user', 'content': ask}]
+    try:
+        tin = tout = 0
+        for _ in range(4):          # 服务器端的搜索循环到上限会停在 pause_turn：把这一轮原样送回去，它接着做
+            with client.messages.stream(messages=messages, **kw) as stream:
+                msg = stream.get_final_message()
+            u = getattr(msg, 'usage', None)
+            tin += getattr(u, 'input_tokens', 0) or 0
+            tout += getattr(u, 'output_tokens', 0) or 0
+            if msg.stop_reason != 'pause_turn':
+                break
+            messages = [{'role': 'user', 'content': ask}, {'role': 'assistant', 'content': msg.content}]
+        if msg.stop_reason == 'refusal':
+            return dict(ok=False, code='refusal', error='模型拒绝了这次搜索。')
+        return dict(ok=True, message=msg.model_dump(mode='json'), model=msg.model, tokens_in=tin, tokens_out=tout)
+    except anthropic.AuthenticationError:
+        return dict(ok=False, code='auth', error='API 密钥无效（401）。')
+    except anthropic.RateLimitError:
+        return dict(ok=False, code='rate', error='请求太频繁或额度用完了（429），稍后再试。')
+    except anthropic.APIStatusError as e:
+        return dict(ok=False, code='api', error=f'接口报错（{e.status_code}）：{scrub(getattr(e, "message", ""))[:200]}')
+    except anthropic.APIConnectionError:
+        return dict(ok=False, code='network', error='连不上 Anthropic 的接口，检查网络或代理。')
+    except Exception as e:      # noqa: BLE001
+        return dict(ok=False, code='error', error=f'搜索失败：{type(e).__name__}')
+

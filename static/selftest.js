@@ -278,6 +278,35 @@
       ok('quant_back_to_four', $('#qBar').hidden && !$('#evidence').hidden && lit() === S.state.lit && /四要素规则引擎/.test($('#sigCard').textContent));
       await pick('SPCX');
     }
+    // 「时效与备注」：侧栏的时效卡片；手写一条备注，图底部出现标记；删掉后消失
+    {
+      const NF = window.FENotes;
+      await pick('NVDA'); await until(() => NF.fresh(), 8000);
+      ok('notes_freshness_card', /K 线数据/.test($('#noteCard').textContent) && /事件日历/.test($('#noteCard').textContent) && /新闻存档/.test($('#noteCard').textContent) &&
+        document.querySelectorAll('#noteCard .fr-days li').length === 5 && !!$('#noteSearch') && $('#noteSearch').disabled === !(S.meta.ai.enabled && NF.data().notable.some(r => !r.searched)), $('#noteCard').textContent);
+      const day = S.bars.d[S.asof - 3], dpr = window.devicePixelRatio || 1;
+      const markAt = () => { const x = Math.round(ch.timeScale().logicalToCoordinate(S.asof - 3) * dpr), y = Math.round((ov.height / dpr - 11) * dpr); const px = ov.getContext('2d').getImageData(x - 3, y - 3, 7, 7).data; let a = 0; for (let k = 3; k < px.length; k += 4) a += px[k]; return a; };
+      await frame(); const before = markAt();
+      NF.openDay(day);
+      const inp = $('#modalBody .note-form input'); inp.value = '自检写的一条';
+      $('#modalBody .note-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const added = await until(() => NF.data() && (NF.data().by_date[day] || []).some(r => r.title === '自检写的一条'), 8000); await frame();
+      ok('notes_manual_note_marks_the_bar', added && before === 0 && markAt() > 0 && /自检写的一条/.test($('#modalBody').textContent) && lit() === S.state.lit, [added, before, markAt()]);
+      // 解说卡片在图上标到这一天时，把这天的备注带在卡片上
+      window.FENarrate.show({ ok: true, source: 'claude', ticker: S.ticker, asof: S.state.asof, model: 'selftest', polish: { enabled: false, reason: '', model: 'x' }, narration: { hook: '自检', story: '自检', final: '还不抄', watch: [],
+        steps: [{ q: '那天', say: '这天有事', sticker: '', tone: 'neutral', evidence: 0, ok: null, draw: [{ type: 'point', date: day, price: S.bars.l[S.asof - 3], label: '坑' }] },
+          { q: '别的', say: '这步没标日期', sticker: '', tone: 'neutral', evidence: 0, ok: null, draw: [] }] } }, false);
+      await frame();
+      const nn = [...document.querySelectorAll('#narr .n-step')].map(li => (li.querySelector('.n-notes') || {}).textContent || '');
+      ok('notes_shown_on_ai_card', /自检写的一条/.test(nn[0]) && nn[1] === '' && /AI 解读/.test($('#noteCard').textContent), nn);
+      window.FENarrate.reset();
+      const row = [...document.querySelectorAll('#modalBody .note-row')].find(r => /自检写的一条/.test(r.textContent));
+      if (row) row.querySelector('button').click();
+      const gone = await until(() => NF.data() && !(NF.data().by_date[day] || []).some(r => r.title === '自检写的一条'), 8000); await frame();
+      ok('notes_delete_clears_the_mark', gone && markAt() === 0, [gone, markAt()]);
+      $('#modalClose').click();
+      await pick('SPCX');
+    }
     // 「一键解释」学习面板：点一下出大白话解释，跟着标的和模型变，能把讲的东西指出来
     {
       const LF = window.FELearn, QF = window.FEQuant;

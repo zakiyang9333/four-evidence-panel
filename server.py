@@ -8,6 +8,8 @@ GET  /api/avwap?ticker=&anchor=&asof=   手动锚定 VWAP 画线用
 GET  /api/ai/narrate?ticker=&asof=       视频式四问解说的模板版（不调用 API），外加上次 Claude 润色的版本（如果有）
 GET  /api/ai/cached?ticker=&asof=        这只标的这一天上次的 Claude 解说（本机保存），以及输入是否变过
 GET  /api/live?ticker=      盘中实时价和今天常规时段的未收盘 K 线（只画图，不参与判定）
+GET  /api/notes?ticker=&asof=           K 线上的备注（事件日、新闻标题、联网搜到的、手写的）和各自的时效
+POST /api/notes/manual | /delete | /search   手写一条、删一条、让 Claude 联网查某几天（会计费，查过的不再查）
 GET  /api/learn?ticker=&model=&asof=    「一键解释」学习面板：大白话讲这一天屏幕上的每样东西（程序拼的，不调用 AI）
 GET  /api/quant?ticker=&model=houshou|four&asof=   「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发
 POST /api/quant/narrate     这份结果的解说：模板（免费）或 Claude（body.claude 为真）
@@ -33,6 +35,7 @@ import ai_explain
 import live
 import learn
 import narrate
+import notes
 import panel
 import portfolio
 import quant
@@ -81,7 +84,11 @@ def run_refresh():
         except (ValueError, IndexError):
             return 500, dict(ok=False, error='prep_data.py 运行失败：' + (p.stderr.strip().splitlines() or ['没有输出'])[-1][:300])
         panel.clear_cache()
-        out = dict(ok=True, at=time.strftime('%Y-%m-%d %H:%M:%S'), seconds=round(time.time() - t0, 1), tickers={
+        try:        # 顺带更新事件日（财报、除息、拆股）和当天的新闻标题存档；取不到不算刷新失败
+            note_rep = notes.refresh_all()
+        except Exception as e:      # noqa: BLE001
+            note_rep = [dict(errors=['备注没更新：' + type(e).__name__])]
+        out = dict(ok=True, at=time.strftime('%Y-%m-%d %H:%M:%S'), seconds=round(time.time() - t0, 1), notes_refresh=note_rep, tickers={
             t: dict(appended=r.get('appended', []), errors=r.get('errors', []), notes=r.get('notes', []),
                     last=r.get('last'), last_src=r.get('last_src'), sources=r.get('sources', {})) for t, r in rep.items()})
         out['has_error'] = any(r['errors'] for r in out['tickers'].values())
@@ -122,9 +129,10 @@ def ai_inputs(t, asof, model='four'):
     # 后手：再加上清单结果，手动改了成本锚点就算变了。
     extra = dict(model='houshou', signal=qf['rule_signal']) if model == 'houshou' else None
     tmpl = quant.template(q) if model == 'houshou' else narrate.template(facts)
-    return dict(facts=facts, bars=bars, bt=bt, pos=pos, q=q, qf=qf, tmpl=tmpl, model=model,
+    ctx = notes.for_ai(t, state['asof'])        # K 线上的备注。不进指纹：盘面没变，保存的解读仍然有效，只是会提示“之后新增了几条备注”
+    return dict(facts=facts, bars=bars, bt=bt, pos=pos, q=q, qf=qf, tmpl=tmpl, model=model, notes=ctx if ctx['notes'] or ctx['next_earnings'] else None,
                 positive=(q['signal']['verdict'] == '下后手') if model == 'houshou' else facts['all4'],
-                allowed=narrate.allowed_numbers(facts, bars, bt, pos, qf, tmpl),
+                allowed=narrate.allowed_numbers(facts, bars, bt, pos, qf, tmpl, ctx),
                 fp=ai_explain.fingerprint(facts, bars, bt, CFG, pos, extra))
 
 
@@ -150,7 +158,8 @@ def ai_narrate(t, asof, model='four'):
 def saved_view(row, x):
     """A saved Claude reading as it is shown again: marked as saved, told whether the market or the positions changed since,
     and its numbers checked again by today's rules. No API call."""
-    old = dict(row, same_input=row.get('fingerprint') == x['fp'], cached=True)
+    old = dict(row, same_input=row.get('fingerprint') == x['fp'], cached=True,
+               notes_since=notes.count_since(row.get('ticker'), row.get('asof'), row.get('created_at')))     # 这份解读生成之后，又新增了几条备注
     bad = narrate.bad_numbers(old['narration'], x['allowed'])
     old.pop('unverified', None); old.pop('notice', None); old.pop('code', None)
     if bad:
@@ -210,7 +219,7 @@ def ai_analyze(body):
     if not _ai_lock.acquire(blocking=False):
         return 409, dict(ok=False, error='上一次分析还没结束。')
     try:
-        got = ai_explain.polish(facts, bars, bt, CFG, pos, x['qf'])
+        got = ai_explain.polish(facts, bars, bt, CFG, pos, x['qf'], x['notes'])
         if not got.get('ok'):
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='没能用上 Claude，已改用模板：' + got['error'], code=got.get('code'), rule_model=model)
         allowed = x['allowed']
@@ -226,7 +235,8 @@ def ai_analyze(body):
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='AI 输出含无法核对的数字，已改用模板', code='numbers', unverified=bad[:8], rule_model=model)
         res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], rule_model=model, positions_sent=len(pos['positions']) if pos else 0,
                                created_at=time.strftime('%Y-%m-%d %H:%M:%S'), fingerprint=fp,
-                               tokens_in=got.get('tokens_in'), tokens_out=got.get('tokens_out'))
+                               tokens_in=got.get('tokens_in'), tokens_out=got.get('tokens_out'),
+                               notes_used=len(x['notes']['notes']) if x['notes'] else 0)
         if bad:     # 自由分析时 Claude 会自己算数：对不上的不丢弃，标出来让人自己判断
             res.update(unverified=bad[:20], code='numbers',
                        notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
@@ -235,6 +245,42 @@ def ai_analyze(body):
         except OSError:
             res['cache_error'] = True
         return 200, res
+    finally:
+        _ai_lock.release()
+
+
+def notes_search(body):
+    """Claude 联网查“那几天发生过什么”。花钱，所以查过的日子记下来，不带 force 不再查第二遍。"""
+    t = body.get('ticker', '')
+    p = notes.payload(t, body.get('asof') or None)
+    done = set(notes.load(t)['searched'])
+    want = body.get('dates')
+    if want:
+        days = set(panel.load(t)['B']['d'])
+        rows = [dict(date=d, why=next((r['why'] for r in p['notable'] if r['date'] == d), '')) for d in want if d in days and d <= p['asof']][:6]
+    else:
+        rows = [r for r in p['notable']]
+    if not body.get('force'):
+        rows = [r for r in rows if r['date'] not in done]
+    if not rows:
+        return 200, dict(ok=True, searched=[], added=0, dropped=0, skipped=True, message='这些天都查过了，没有再查（也没有再计费）。', notes=notes.payload(t, body.get('asof') or None))
+    if not _ai_lock.acquire(blocking=False):
+        return 409, dict(ok=False, error='上一次 AI 请求还没结束。')
+    try:
+        got = ai_explain.search_days(notes.NAMES.get(t, t), t, rows, CFG)
+        if not got.get('ok'):
+            return 200, dict(ok=False, error=got['error'], code=got.get('code'))
+        dates = [r['date'] for r in rows]
+        try:        # 原始返回留一份在本机（cache/ 不进 git）：核对规则丢了什么、为什么丢，事后查得到
+            os.makedirs(os.path.join(AI_CACHE, 'search'), exist_ok=True)
+            with open(os.path.join(AI_CACHE, 'search', f'{t}_{time.strftime("%Y%m%d_%H%M%S")}.json'), 'w', encoding='utf-8') as f:
+                json.dump(dict(ticker=t, dates=dates, message=got['message']), f, ensure_ascii=False, indent=1)
+        except OSError:
+            pass
+        kept, dropped, searches = notes.verify_search(got['message'], dates)
+        added = notes.store_search(t, dates, kept, dict(model=got['model'], tokens_in=got['tokens_in'], tokens_out=got['tokens_out'], searches=searches))
+        return 200, dict(ok=True, searched=dates, added=added, kept=len(kept), dropped=dropped, searches=searches, model=got['model'],
+                         tokens_in=got['tokens_in'], tokens_out=got['tokens_out'], notes=notes.payload(t, body.get('asof') or None))
     finally:
         _ai_lock.release()
 
@@ -285,6 +331,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {t: panel.freshness(t) for t in panel.TICKERS})
                 if u.path == '/api/ai/narrate':
                     return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None, q.get('model')))
+                if u.path == '/api/notes':        # K 线上的备注：事件日、新闻标题、联网搜到的、手写的，以及各自的时效
+                    return self._send(200, notes.payload(q.get('ticker', ''), q.get('asof') or None))
                 if u.path == '/api/learn':        # 「一键解释」：把这一天的结果讲成大白话，不调用 AI
                     return self._send(200, learn.build(q.get('ticker', ''), ai_model(q.get('model')), q.get('asof') or None))
                 if u.path == '/api/quant':
@@ -346,6 +394,15 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get('claude'):
                     return self._send(*ai_analyze(body))
                 return self._send(200, ai_narrate(body.get('ticker', ''), body.get('asof') or None, body.get('model') or 'houshou'))
+            if u.path == '/api/notes/manual':
+                t = body.get('ticker', '')
+                item = notes.add_manual(t, body.get('date', ''), body.get('text', ''))
+                return self._send(200, dict(ok=True, item=item, notes=notes.payload(t, body.get('asof') or None)))
+            if u.path == '/api/notes/delete':
+                t = body.get('ticker', '')
+                return self._send(200, dict(ok=True, removed=notes.delete(t, body.get('id', '')), notes=notes.payload(t, body.get('asof') or None)))
+            if u.path == '/api/notes/search':
+                return self._send(*notes_search(body))
             if u.path == '/api/quant/anchor':         # 手动成本锚点：date 为空就是清除，回到自动
                 t = body.get('ticker', '')
                 return self._send(200, dict(ok=True, ticker=t, anchor=quant.set_anchor(t, body.get('date') or None)))

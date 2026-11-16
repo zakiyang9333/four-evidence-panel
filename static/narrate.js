@@ -127,6 +127,7 @@ window.FENarrate = (() => {
       mid.appendChild(el('em', 'q', s.q)); mid.appendChild(mark(el('b', 'say'), s.say)); mid.appendChild(lk);
       if ((s.draw || []).length) mid.appendChild(el('span', 'has-draw', '▶ 图上 ' + s.draw.length + ' 处标记'));
       li.appendChild(mid);
+      addNotes(li, s);
       const tone = s.tone || (/证据|站回来|报警/.test(s.sticker) ? 'good' : s.sticker === '不适用' ? 'neutral' : 'bad');
       if (s.sticker) li.appendChild(el('span', 'sticker' + (tone === 'good' ? ' good' : tone === 'neutral' ? ' na' : ''), s.sticker));
       ol.appendChild(li);
@@ -145,8 +146,24 @@ window.FENarrate = (() => {
     w.appendChild(el('div', 'w-title', '下一根 K 线看什么'));
     const ul = el('ul'); n.watch.forEach(x => ul.appendChild(mark(el('li', ''), x))); w.appendChild(ul);
     $('#aiRun').textContent = '↻ 重播';
+    if (window.FENotes) window.FENotes.render();          // 时效卡片里有一行是这份解读的
     if (animate) { $('#aiSkip').hidden = false; ctx.onReveal([]); timer = setTimeout(step, 450); } else finish();
     sync();
+  }
+
+  // 这一步在图上标的那几天，如果有备注（财报日、新闻、手写的），在卡片上带一行小字：让人知道当时发生过什么
+  function addNotes(li, s) {
+    const old = li.querySelector('.n-notes'); if (old) old.remove();
+    const rows = window.FENotes ? window.FENotes.forDraw(s.draw) : [];
+    if (!rows.length) return;
+    const box = el('div', 'n-notes');
+    rows.forEach(r => box.appendChild(el('span', r.fact ? 'fact' : '', r.text)));
+    li.querySelector('.mid').appendChild(box);
+  }
+  function renotes() {          // 备注后到（或刚加了一条）：把已经显示的卡片补上
+    if (!cur) return;
+    document.querySelectorAll('#narr .n-step').forEach(li => { const s = cur.narration.steps[Number(li.dataset.k)]; if (s) addNotes(li, s); });
+    if (window.FENotes) window.FENotes.render();
   }
 
   // 已经出现的卡片讲到了四要素里的哪几项：证据条只亮这几项（Claude 可能不按 1–4 的顺序讲，也可能不全讲）
@@ -185,5 +202,5 @@ window.FENarrate = (() => {
     ctx.flash(ev ? ev - 1 : null, text, 'step' + k, (s && s.draw) || [], auto);
   }
 
-  return { init, reset, sync, run, restore, polish, show, current: () => cur, shown: () => shown, finish };
+  return { init, reset, sync, run, restore, polish, show, renotes, current: () => cur, shown: () => shown, finish };
 })();

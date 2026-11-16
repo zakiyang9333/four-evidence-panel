@@ -70,6 +70,7 @@
       <div id="legMacd" class="leg sub" hidden></div>
       <div id="evidence"></div>
       <div id="qBar" hidden></div>
+      <div id="noteTip" hidden></div>
       <div id="qMenu" hidden></div>
       <div id="hint" hidden></div>
       <form id="textBox" hidden><input id="textInput" maxlength="40" placeholder="标注文字，回车确定" autocomplete="off"></form>
@@ -111,6 +112,9 @@
       <div class="sec-title">当前图表 <span class="qtag" id="qLabel"></span></div>
       <div class="card" id="qScore"><div class="muted small">计算中…</div></div>
 
+      <div class="sec-title">⏱ 时效与备注 <span class="muted small">每样信息有多新，那几天发生过什么</span></div>
+      <div class="card thin" id="noteCard"></div>
+
       <div class="sec-title">✦ AI 深度解读 <span class="qtag" id="narrSrc" hidden></span><span class="muted small" id="narrMeta"></span></div>
       <div class="card narr" id="narrCard">
         <div class="narr-actions">
@@ -151,6 +155,7 @@
 <script src="/static/narrate.js"></script>
 <script src="/static/quant.js"></script>
 <script src="/static/learn.js"></script>
+<script src="/static/notes.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -6,4 +6,5 @@ PY=.venv/bin/python
 [ -x "$PY" ] || PY=$(command -v python3)
 echo "$(date '+%F %T') 定时刷新开始"
 FE_REFRESH_TRIGGER=schedule "$PY" prep_data.py
+"$PY" notes.py --refresh     # 事件日（财报、除息、拆股）和当天的新闻标题存档；失败不影响上面的日线
 echo "$(date '+%F %T') 定时刷新结束（退出码 $?）"

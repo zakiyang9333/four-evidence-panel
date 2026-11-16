@@ -226,7 +226,8 @@ class Server:
         e = {k: v for k, v in os.environ.items() if not k.startswith('ANTHROPIC_') and k not in ('FE_DATA_DIR', 'FE_PORTFOLIO_DIR')}
         self.empty = tempfile.mkdtemp(prefix='fe_nopf_')      # 默认给一个空的持仓目录：测试不读真的持仓文件
         self.cache = tempfile.mkdtemp(prefix='fe_aicache_')   # AI 解读也存到临时目录，不碰 cache/ai
-        e.update(FE_PORT=str(self.port), FE_PORTFOLIO_DIR=self.empty, FE_CACHE_DIR=self.cache, FE_LIVE='0')   # 测试不连 Yahoo
+        self.notes = tempfile.mkdtemp(prefix='fe_notes_')     # 备注也存到临时目录，不碰 data/notes，不连 Yahoo
+        e.update(FE_PORT=str(self.port), FE_PORTFOLIO_DIR=self.empty, FE_CACHE_DIR=self.cache, FE_LIVE='0', FE_NOTES_DIR=self.notes, FE_NOTES_OFFLINE='1')   # 测试不连 Yahoo
         e.update(env or {})
         self.p = subprocess.Popen([sys.executable, os.path.join(ROOT, 'server.py')], cwd=ROOT, env=e, stdout=self.log, stderr=subprocess.STDOUT)
         for _ in range(100):
@@ -244,7 +245,7 @@ class Server:
 
     def stop(self):
         self.p.terminate(); self.p.wait(10); self.log.close(); os.unlink(self.log.name)
-        shutil.rmtree(self.empty, ignore_errors=True); shutil.rmtree(self.cache, ignore_errors=True)
+        shutil.rmtree(self.empty, ignore_errors=True); shutil.rmtree(self.cache, ignore_errors=True); shutil.rmtree(self.notes, ignore_errors=True)
 
 
 class NoKey(unittest.TestCase):
@@ -562,7 +563,8 @@ class Freshness(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix='fe_stale_')
         try:
             for f in os.listdir(os.path.join(ROOT, 'data')):
-                shutil.copy(os.path.join(ROOT, 'data', f), tmp)
+                if os.path.isfile(os.path.join(ROOT, 'data', f)):       # data/notes 是目录（K 线备注），不用带
+                    shutil.copy(os.path.join(ROOT, 'data', f), tmp)
             with open(os.path.join(tmp, 'SPCX.csv'), newline='') as f:
                 lines = f.read().splitlines(keepends=True)
             with open(os.path.join(tmp, 'SPCX.csv'), 'w', newline='') as f:

@@ -310,14 +310,17 @@ window.FEQuant = (() => {
 
   // ---------- 右键：手动成本锚点（只在后手模型下）----------
   function onContext(e) {
-    if (Q.model !== 'houshou' || !c.stateFresh() || !c.isDaily()) return;
+    if (!c.stateFresh() || !c.isDaily()) return;
     e.preventDefault();
     const pt = c.ptFromEvent(e), i = Math.max(0, Math.min(c.S.asof, pt.li)), date = c.S.bars.d[i], m = $('#qMenu');
     const manual = fresh() && Q.data.signal.anchor && Q.data.signal.anchor.by === 'manual';
     m.textContent = '';
     const add = (text, fn, off) => { const b = document.createElement('button'); b.textContent = text; b.disabled = !!off; b.onclick = () => { m.hidden = true; fn(); }; m.appendChild(b); };
-    add('设为成本锚点（' + date + '）', () => anchor(date));
-    add('清除手动锚点，回到自动', () => anchor(null), !manual);
+    if (window.FENotes) window.FENotes.menu(date, add);        // 写备注、联网查这一天
+    if (Q.model === 'houshou') {
+      add('设为成本锚点（' + date + '）', () => anchor(date));
+      add('清除手动锚点，回到自动', () => anchor(null), !manual);
+    }
     const r = $('#chartwrap').getBoundingClientRect();
     m.style.left = Math.min(e.clientX - r.left, r.width - 220) + 'px'; m.style.top = Math.min(e.clientY - r.top, r.height - 80) + 'px';
     m.hidden = false;

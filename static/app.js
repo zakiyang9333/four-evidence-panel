@@ -495,6 +495,7 @@ function draw() {
   const four = !window.FEQuant.hideFour();      // 选了后手模型时，四证的自动画和 1–4 标记先收起来
   if (stateFresh() && isDaily()) { if (S.auto && four) drawAuto(); }     // 扇子、成本线、标记都是按日线 K 线的位置画的
   window.FEQuant.draw();                          // 「AI 量化」面板的结构线和后手模型的叠加
+  window.FENotes.draw();                          // K 线底部的备注标记：那一天发生过什么
   drawPortfolioLines();
   drawManual();
   drawPending();
@@ -602,6 +603,7 @@ async function fetchState() {
     window.FENarrate.restore();      // 这一天保存过 Claude 的解说就直接显示，不用再点、不再计费
     window.FEQuant.onState();        // 表盘、规则模型信号、结构线：按这一天重算
     window.FELearn.onState();        // 「一键解释」开着的话，跟着这一天重写
+    window.FENotes.onState();        // 备注和时效：只给这一天以及之前的
     candle.applyOptions({ autoscaleInfoProvider: scaleProvider });
     S.rev++;
   } catch (e) { if (seq === S.seq) toast('取状态失败：' + e.message, true); }
@@ -624,7 +626,7 @@ async function setTicker(t, date) {
   if (b.ok === false) return toast(b.error, true);
   S.bars = b; S.idx = {}; b.d.forEach((d, i) => { S.idx[d] = i; });
   S.state = null; S.avwap = {}; S.hover = null; S.flash = null; S.spanHome = null;
-  window.FENarrate.reset(); window.FEQuant.reset();
+  window.FENarrate.reset(); window.FEQuant.reset(); window.FENotes.reset();
   if (S.live && S.live.ticker !== t) S.live = null;
   setTimeout(pollLive, 0);
   if (S.tool === 'avwap' && !isDaily()) setTool('cursor');
@@ -1089,6 +1091,10 @@ function bind() {
     setAuto: on => { if (S.auto !== on) { S.auto = on; store.set('auto', on); renderTop(); syncPriceLines(); S.rev++; } },
     modelChanged: () => { renderEvidence(); renderSide(); syncPriceLines(); S.rev++; window.FELearn.onState(); },
     narr: window.FENarrate,
+  });
+  window.FENotes.init({
+    api, toast, S, esc, X, Y, g: () => ctx, OV: () => OV, label, stateFresh: () => !!stateFresh(), isDaily, asofDate, ptFromEvent,
+    redraw: () => { S.rev++; }, narr: window.FENarrate, aiEnabled: () => !!(S.meta && S.meta.ai && S.meta.ai.enabled),
   });
   window.FELearn.init({
     api, toast, esc, S, stateFresh: () => !!stateFresh(), asofDate, model: () => window.FEQuant.model(), resized: () => { setTimeout(() => tick(true), 0); },

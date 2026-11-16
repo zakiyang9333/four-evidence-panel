@@ -19,3 +19,6 @@ ref/
 data/houshou_anchor.json
 screenshots/quant_houshou_SPCX.png
 wip_quant/
+
+# K 线备注（事件日、新闻标题存档、联网搜到的、手写的）是本机状态
+data/notes/
