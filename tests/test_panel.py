@@ -308,7 +308,9 @@ class NoKey(unittest.TestCase):
 
 
 GOOD_REPLY = dict(hook='停，先别急着抄', story='冲高之后一路回落，中间夹着几次反弹',
-                  steps=[dict(q='乱写的名字', look='量还没有缩到最小', say='还有人在卖', sticker='不抄！', evidence=9, ok=False)] * 4,
+                  steps=[dict(q='缺口没补', look='前面留了一个向下的缺口', say='缺口还压在头上', sticker='有压力', tone='bad', evidence=0),
+                         dict(q='成本线', look='收盘在成本线上面', say='可这里说没站回', sticker='没站回', tone='bad', evidence=4),
+                         dict(q='量', look='量缩到了窗口里最小', say='地量到了', sticker='缩量了', tone='good', evidence=1)],
                   final='还不抄', watch=['等下一根收盘再看'])
 
 
@@ -361,11 +363,13 @@ class WithKey(unittest.TestCase):
         self.assertTrue(json.loads(meta)['ai']['enabled'])
         code, body = self.call(); res = json.loads(body)
         self.assertEqual(code, 200, body); self.assertEqual(res['source'], 'claude'); n = res['narration']
-        self.assertEqual((n['hook'], n['steps'][0]['say']), ('停，先别急着抄', '还有人在卖'))             # Claude 的措辞保留
-        # ……但结构和结论由引擎覆盖：这一天是 4/4
-        self.assertEqual([s['q'] for s in n['steps']], ['第一问 量', '第二问 MACD', '第三问 扇子', '第四问 成本线'])
-        self.assertEqual([(s['evidence'], s['ok']) for s in n['steps']], [(1, True), (2, True), (3, True), (4, True)])
-        self.assertEqual([s['sticker'] for s in n['steps']], ['证据+1', '报警而已', '证据+1', '站回来了'])     # “不抄！”和引擎矛盾，被换掉
+        # 内容是 Claude 的：讲几步、讲什么、什么顺序、小标题、贴纸，都原样保留
+        self.assertEqual((n['hook'], len(n['steps'])), ('停，先别急着抄', 3))
+        self.assertEqual([s['q'] for s in n['steps']], ['缺口没补', '成本线', '量'])
+        self.assertEqual((n['steps'][0]['evidence'], n['steps'][0]['ok'], n['steps'][0]['sticker']), (0, None, '有压力'))   # 和四要素无关的一步
+        self.assertEqual((n['steps'][2]['ok'], n['steps'][2]['sticker']), (True, '缩量了'))
+        # 引擎说了算的只有两处：这一天是 4/4，所以“成本线没站回”的贴纸被换掉，大字结论“还不抄”被换掉
+        self.assertEqual((n['steps'][1]['ok'], n['steps'][1]['sticker'], n['steps'][1]['tone']), (True, '站回来了', 'good'))
         self.assertEqual(n['final'], '4/4，四样齐了'); self.assertEqual(res['card']['verdict'], '可以入场（仅观察）')
         path, headers, req = FakeClaude.seen[-1]
         sent = headers.get('x-api-key') or headers.get('authorization', '').replace('Bearer ', '')
@@ -373,7 +377,8 @@ class WithKey(unittest.TestCase):
         for text in (meta, body, self.s.output(), http(self.s.port, '/')[1], http(self.s.port, '/static/app.js')[1]):
             self.assertNotIn(FAKE_KEY, text)                                      # ... and nowhere else
         self.assertEqual(req['model'], json.loads(meta)['ai']['model'])
-        self.assertIn('以输入里的规则引擎结果为准', req['system']); self.assertIn('不要给具体下单指令', req['system'])
+        self.assertIn('以输入里引擎的结果为准', req['system']); self.assertIn('不给具体下单指令', req['system'])
+        self.assertIn('都由你根据盘面决定', req['system']); self.assertNotIn('按固定顺序', req['system'])       # 内容自由，不再固定四问
         self.assertTrue(req['system'].startswith('你是一个交易图表解说员'))
         self.assertTrue(req.get('stream'))
         self.assertEqual(req['output_config']['format']['type'], 'json_schema')     # 只允许按结构输出 JSON
@@ -385,18 +390,19 @@ class WithKey(unittest.TestCase):
         self.assertEqual([payload[k]['ok'] for k in ('e1', 'e2', 'e3', 'e4')], [True] * 4)
         self.assertIn('next_close_needs', payload); self.assertNotIn('signals', payload)
 
-    def test_unverifiable_number_falls_back_to_template(self):
+    def test_unverifiable_number_is_flagged_not_dropped(self):
+        """Free analysis: Claude may compute its own numbers. Ones that cannot be traced are flagged for the reader."""
         bad = json.loads(json.dumps(GOOD_REPLY)); bad['steps'][2]['look'] = '收盘站上 123456.78'
         FakeClaude.reply = bad
         try:
             res = json.loads(self.call()[1])
         finally:
             FakeClaude.reply = GOOD_REPLY
-        self.assertEqual((res['source'], res['notice'], res['code']), ('template', 'AI 输出含无法核对的数字，已改用模板', 'numbers'))
-        self.assertIn('123456.78', res['unverified']); self.assertEqual(len(res['narration']['steps']), 4)
-        # 测试开关：往正常输出里塞一个假数字，同样被拦住
+        self.assertEqual((res['source'], res['code'], res['unverified']), ('claude', 'numbers', ['123456.78']))
+        self.assertIn('找不到', res['notice']); self.assertEqual(res['narration']['steps'][2]['look'], '收盘站上 123456.78')
+        # 测试开关：往正常输出里塞一个假数字，同样被标出来
         res = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'NVDA', 'asof': '2025-05-13', 'test_fake_number': True})[1])
-        self.assertEqual((res['source'], res['notice']), ('template', 'AI 输出含无法核对的数字，已改用模板'))
+        self.assertEqual(res['unverified'], ['987.65']); self.assertIn('找不到', res['notice'])
 
     def test_broken_json_is_retried_once_then_template(self):
         FakeClaude.reply = '这不是 JSON'
@@ -539,7 +545,11 @@ class Narration(unittest.TestCase):
         n, why = narrate.normalize(raw, f, tm)
         self.assertIsNone(why); self.assertEqual(n['final'], '未触发，不抄')
         self.assertEqual([s['ok'] for s in n['steps']], [False] * 4); self.assertNotIn('证据+1', [s['sticker'] for s in n['steps']])
-        self.assertEqual(narrate.normalize(dict(raw, steps=raw['steps'][:3]), f, tm)[0], None)
+        self.assertEqual(narrate.normalize(dict(raw, steps=raw['steps'][:1]), f, tm)[0], None)          # 至少两步
+        self.assertEqual(narrate.normalize(dict(raw, steps=raw['steps'] * 3), f, tm)[0], None)          # 至多八步
+        free = dict(GOOD_REPLY, final='还不抄', steps=[dict(q='缺口', look='看', say='说', sticker='假突破', tone='bad', evidence=0)] * 6)
+        n, why = narrate.normalize(free, f, tm)                                                         # 六步、全是引擎没覆盖的角度：原样接受
+        self.assertEqual((len(n['steps']), n['steps'][0]['sticker'], n['steps'][0]['ok'], n['final']), (6, '假突破', None, '还不抄'))
 
 
 class LiveLayer(unittest.TestCase):

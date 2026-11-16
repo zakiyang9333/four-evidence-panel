@@ -753,9 +753,9 @@ function renderEvidence() {
   el.classList.toggle('fold', S.evFold);
   if (!st) { el.innerHTML = '<div class="ev-head"><span class="ev-tag">案件</span><h2>抄底核心四要素</h2><span class="ev-score">证据 …</span></div>'; return; }
   // 解说播放时（S.reveal = 已经出到第几问），证据条跟着一条一条亮；平时 S.reveal 为空，全部按引擎结果显示
-  const gate = S.reveal, seen = e => gate == null || e.n <= gate;
+  const gate = S.reveal, seen = e => gate == null || gate.indexOf(e.n) >= 0;      // gate = 解说里已经讲到的证据编号
   const litN = gate == null ? st.lit : st.evidence.filter(e => e.lit && seen(e)).length;
-  const sub = gate != null && gate < 4 ? '解说中…' : !st.armed ? '未触发' : st.all4 ? '四项齐了' : '';
+  const sub = gate != null ? '解说中…' : !st.armed ? '未触发' : st.all4 ? '四项齐了' : '';
   const fr = st.freshness;
   let h = '<div class="ev-head" title="点一下折叠 / 展开"><span class="ev-tag">案件 · ' + esc(st.ticker) + ' ' + st.asof + '</span><h2>抄底核心四要素</h2>' +
     '<span class="ev-score">证据 ' + litN + '/4' + (sub ? '<small>' + sub + '</small>' : '') + '</span>' +
@@ -763,7 +763,7 @@ function renderEvidence() {
     (isDaily() ? '' : '<span class="ev-note" id="evTf">按日线 ' + st.asof + ' 收盘判定；周线只看走势</span>') + '</div><ol>';
   st.evidence.forEach(e => {
     const tag = !seen(e) ? '…' : e.lit ? '成立' : (e.ok && !st.armed ? '未触发' : '未成立');
-    h += '<li class="' + (e.lit && seen(e) ? 'on' : '') + (seen(e) ? '' : ' wait') + (gate != null && e.n === gate ? ' now' : '') + '" title="' + esc(e.text) + '"><i>' + e.n + '</i><div><b>' + esc(e.name) + '</b><em>' + tag + '</em><p>' + esc(e.text) + '</p></div></li>';
+    h += '<li class="' + (e.lit && seen(e) ? 'on' : '') + (seen(e) ? '' : ' wait') + (gate != null && gate.length && e.n === gate[gate.length - 1] ? ' now' : '') + '" title="' + esc(e.text) + '"><i>' + e.n + '</i><div><b>' + esc(e.name) + '</b><em>' + tag + '</em><p>' + esc(e.text) + '</p></div></li>';
   });
   el.innerHTML = h + '</ol>';
 }

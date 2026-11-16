@@ -95,7 +95,7 @@
     ok('rule_card_from_engine', $('#sigVerdict').textContent === S.state.card.verdict && /证据不足（\d+ 笔，p=0\.\d+）/.test($('#sigFoot').textContent) && document.querySelectorAll('#sigCard .big3 div').length === 3, $('#sigCard').textContent);
     ok('narr_button_free', !$('#aiRun').disabled && $('#narr').hidden);
     $('#aiRun').click();
-    await until(() => N.current() && N.shown() >= 1 && N.shown() < 4, 5000);
+    await until(() => N.current() && N.shown() >= 1 && N.shown() < 4 && S.reveal, 5000);
     const midShown = document.querySelectorAll('#narr .n-step.show').length, midScore = $('#evidence .ev-score').textContent, midWait = document.querySelectorAll('#evidence li.wait').length;
     ok('narr_steps_appear_one_by_one', midShown >= 1 && midShown < 4 && midWait === 4 - midShown && /解说中/.test(midScore) && !$('#aiSkip').hidden, [midShown, midWait, midScore]);
     await until(() => $('#narr .n-final.show'), 8000);

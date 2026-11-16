@@ -103,7 +103,8 @@ def template(f):
     steps = []
 
     def step(k, look, say, sticker, ok):
-        steps.append(dict(q=QUESTIONS[k], look=look, say=say, sticker=sticker, evidence=k + 1, ok=bool(ok)))
+        steps.append(dict(q=QUESTIONS[k], look=look, say=say, sticker=sticker, tone='good' if sticker in GOOD else 'neutral' if sticker == '不适用' else 'bad',
+                          evidence=k + 1, ok=bool(ok)))
 
     # 第一问 量
     if e1['ok']:
@@ -183,42 +184,49 @@ SCHEMA = {
         'hook': {'type': 'string'}, 'story': {'type': 'string'}, 'final': {'type': 'string'},
         'watch': {'type': 'array', 'items': {'type': 'string'}},
         'steps': {'type': 'array', 'items': {
-            'type': 'object', 'additionalProperties': False, 'required': ['q', 'look', 'say', 'sticker', 'evidence', 'ok'],
-            'properties': {'q': {'type': 'string'}, 'look': {'type': 'string'}, 'say': {'type': 'string'},
-                           'sticker': {'type': 'string', 'enum': list(STICKERS)}, 'evidence': {'type': 'integer'}, 'ok': {'type': 'boolean'}}}},
+            'type': 'object', 'additionalProperties': False, 'required': ['q', 'look', 'say', 'sticker', 'tone', 'evidence'],
+            'properties': {'q': {'type': 'string'}, 'look': {'type': 'string'}, 'say': {'type': 'string'}, 'sticker': {'type': 'string'},
+                           'tone': {'type': 'string', 'enum': ['good', 'bad', 'neutral']}, 'evidence': {'type': 'integer'}}}},
     },
 }
+MIN_STEPS, MAX_STEPS = 2, 8
 
 
 def normalize(raw, f, tmpl):
-    """Claude's JSON -> the fixed structure. Returns (narration, None) or (None, reason)."""
+    """Claude's JSON -> cards. Claude chooses what to look at, how many steps and in what order (zaki 11-16: 市场变化多，
+    内容要完全自由，只保留模板版那种呈现方式)。What stays with the engine: a step that says it is about evidence 1–4 gets that
+    evidence's true/false from the engine, and a sticker that contradicts it is replaced. Returns (narration, None) or (None, reason)."""
     if not isinstance(raw, dict):
         return None, '不是 JSON 对象'
     steps = raw.get('steps')
-    if not (isinstance(steps, list) and len(steps) == 4 and all(isinstance(s, dict) for s in steps)):
-        return None, '四问不是 4 条'
+    if not (isinstance(steps, list) and MIN_STEPS <= len(steps) <= MAX_STEPS and all(isinstance(s, dict) for s in steps)):
+        return None, f'步骤数不在 {MIN_STEPS}–{MAX_STEPS} 之间'
     out = dict(steps=[])
     for key in ('hook', 'story', 'final'):
         if not (isinstance(raw.get(key), str) and raw[key].strip()):
             return None, f'缺少 {key}'
         out[key] = raw[key].strip()
     for k, s in enumerate(steps):
-        t = tmpl['steps'][k]
-        look, say = s.get('look'), s.get('say')
+        look, say, q = s.get('look'), s.get('say'), s.get('q')
         if not (isinstance(look, str) and look.strip() and isinstance(say, str) and say.strip()):
-            return None, f'第 {k + 1} 问缺少 look 或 say'
-        sticker = s.get('sticker')
-        ok = t['ok']                                             # 引擎说了算
-        if sticker not in STICKERS or (ok and sticker in BAD) or (not ok and sticker in GOOD):
-            sticker = t['sticker']
-        out['steps'].append(dict(q=QUESTIONS[k], look=look.strip(), say=say.strip() if len(say.strip()) <= 40 else t['say'],
-                                 sticker=sticker, evidence=k + 1, ok=ok))
+            return None, f'第 {k + 1} 步缺少 look 或 say'
+        ev = s.get('evidence') if s.get('evidence') in (1, 2, 3, 4) else 0
+        sticker = s.get('sticker').strip()[:8] if isinstance(s.get('sticker'), str) and s.get('sticker').strip() else ''
+        tone = s.get('tone') if s.get('tone') in ('good', 'bad', 'neutral') else ('good' if sticker in GOOD else 'bad' if sticker in BAD else 'neutral')
+        ok = None
+        if ev:                                                   # 这一步讲的是四项证据之一：成立与否引擎说了算
+            t = tmpl['steps'][ev - 1]
+            ok = t['ok']
+            if (ok and tone == 'bad') or (not ok and tone == 'good'):
+                sticker, tone = t['sticker'], ('good' if ok else 'bad')
+        out['steps'].append(dict(q=q.strip()[:20] if isinstance(q, str) and q.strip() else f'第 {k + 1} 步', look=look.strip(), say=say.strip(),
+                                 sticker=sticker, tone=tone, evidence=ev, ok=ok))
     # 大字结论不能和引擎唱反调
     fin = out['final']
     if (f['all4'] and re.search(r'不抄|未触发|不可|别', fin)) or (not f['all4'] and not re.search(r'不抄|未触发|还不|不可|别|不够|再等|等', fin)) or len(fin) > 16:
         out['final'] = tmpl['final']
     watch = raw.get('watch')
-    out['watch'] = [w.strip() for w in watch if isinstance(w, str) and w.strip()][:4] if isinstance(watch, list) else []
+    out['watch'] = [w.strip() for w in watch if isinstance(w, str) and w.strip()][:6] if isinstance(watch, list) else []
     if not out['watch']:
         out['watch'] = list(tmpl['watch'])
     return out, None
@@ -256,9 +264,19 @@ def bad_numbers(narr, allowed):
     """Numbers in the narration that cannot be traced to the input (after rounding to 0–2 decimals or a ×100 / ÷100 percent conversion)."""
     forms = set()
     for a in allowed:
-        for m in (1, 100, 0.01):
+        # 原值、百分比换算，以及成交量换成万 / 百万 / 亿
+        for m in (1, 100, 0.01) + ((1e-4, 1e-6, 1e-8) if a >= 1e5 else ()):
             for k in (0, 1, 2):
                 forms.add(round(a * m, k))
+    # 自由分析时常见的两种现算：两个价位的差、一个价位相对另一个的涨跌幅
+    prices = sorted(a for a in allowed if 0 < a < 1e5)
+    if len(prices) <= 600:
+        for i, a in enumerate(prices):
+            for b in prices[i + 1:]:
+                d, p = b - a, (b / a - 1) * 100
+                q = (1 - a / b) * 100
+                for k in (0, 1, 2):
+                    forms.add(round(d, k)); forms.add(round(p, k)); forms.add(round(q, k))
     texts = [narr['hook'], narr['story'], narr['final']] + list(narr['watch'])
     for s in narr['steps']:
         texts += [s['look'], s['say']]
