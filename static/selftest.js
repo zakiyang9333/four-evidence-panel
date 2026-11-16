@@ -278,6 +278,31 @@
       ok('quant_back_to_four', $('#qBar').hidden && !$('#evidence').hidden && lit() === S.state.lit && /四要素规则引擎/.test($('#sigCard').textContent));
       await pick('SPCX');
     }
+    // 「一键解释」学习面板：点一下出大白话解释，跟着标的和模型变，能把讲的东西指出来
+    {
+      const LF = window.FELearn, QF = window.FEQuant;
+      ok('learn_closed_by_default', $('#learn').hidden && !LF.isOpen());
+      $('#learnBtn').click(); await until(() => LF.data() && LF.data().ticker === S.ticker, 8000);
+      const ld = LF.data(), cards = [...document.querySelectorAll('#learn .lcard')];
+      ok('learn_opens_with_plain_cards', !$('#learn').hidden && cards.length === ld.cards.length && cards.length >= 12 && !!$('#learn .learn-hl b').textContent &&
+        cards.every(a => a.querySelector('h4').textContent.length > 3 && a.querySelector('p').textContent.length > 20) && /不调用 AI/.test($('#learn .lfoot').textContent), cards.length);
+      ok('learn_says_today', document.querySelectorAll('#learn .lnow').length >= 8 && new RegExp(S.state.asof).test($('#learn').textContent));
+      ok('learn_chart_still_there', candle.data().length === S.bars.d.length && $('#chart').getBoundingClientRect().width > 300, $('#chart').getBoundingClientRect().width);
+      document.querySelector('#learn .lcard[data-id=banner] .lspot').click();
+      ok('learn_points_at_things', $('#banner').classList.contains('learn-spot'));
+      document.querySelector('#learn .lcard[data-id=e1] .lspot').click(); await frame();
+      ok('learn_points_at_evidence', $('#evidence').classList.contains('learn-spot') && S.flash && S.flash.k === 0, S.flash && S.flash.k);
+      const sel = $('#qModel'); sel.value = 'houshou'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await until(() => LF.data() && LF.data().model_key === 'houshou', 8000);
+      ok('learn_follows_model', !!document.querySelector('#learn .lcard[data-id=h_idea]') && !document.querySelector('#learn .lcard[data-id=e1]') && /后手/.test($('#learn .learn-head').textContent));
+      sel.value = 'four'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => LF.data() && LF.data().model_key === 'four' && QF.fresh(), 8000);
+      await pick('QQQ'); await until(() => LF.data() && LF.data().ticker === 'QQQ', 8000);
+      ok('learn_follows_ticker', /QQQ/.test($('#learn .learn-head').textContent));
+      ok('learn_no_advice', !/建议买|建议卖|可以买入|赶紧/.test($('#learn').textContent) && /不告诉你该买还是该卖/.test($('#learn').textContent));
+      document.querySelector('#learn .learn-head button').click();
+      ok('learn_closes', $('#learn').hidden && !LF.isOpen());
+      await pick('SPCX');
+    }
     const ext = performance.getEntriesByType('resource').map(e => e.name).filter(u => new URL(u).host !== location.host && !(helper && new URL(u).port === helper));
     ok('no_external_requests', ext.length === 0, ext);
   } catch (e) { out.error = String(e && e.stack || e); }

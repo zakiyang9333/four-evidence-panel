@@ -296,6 +296,35 @@ class NoKey(unittest.TestCase):
             self.assertNotIn('https://', txt.replace('https://www.apache.org', ''), f)
             self.assertNotIn('ANTHROPIC_API_KEY=', txt, f)
 
+    def test_learn_panel_explains_in_plain_words_from_engine_numbers(self):
+        """「一键解释」：程序拼的大白话，每个数字都来自引擎，不给买卖建议，没有密钥也能用。"""
+        import quant
+        for t, m, asof in (('QQQ', 'four', ''), ('NVDA', 'four', '2025-05-13'), ('SPCX', 'four', ''), ('NVDA', 'houshou', '2025-01-06'),
+                           ('NVDA', 'houshou', '2013-06-19'), ('QQQ', 'houshou', '')):
+            code, body = http(self.s.port, f'/api/learn?ticker={t}&model={m}&asof={asof}')
+            self.assertEqual(code, 200, body[:200])
+            d = json.loads(body)
+            self.assertEqual((d['ticker'], d['model_key']), (t, m))
+            self.assertGreaterEqual(len(d['cards']), 12)
+            texts = [d['headline']['text'], d['headline']['sub'], d['footer']]
+            for c in d['cards']:
+                self.assertTrue(len(c['title']) > 3 and len(c['body']) > 20, c['id'])
+                self.assertLessEqual(max(len(x) for x in c['body'].replace('？', '。').replace('；', '。').split('。')), 60, c['id'])   # 短句
+                texts += [c['title'], c['body'], c['now'] or '', c['note'] or ''] + [i['name'] + i['text'] for i in c['items']]
+            text = ' '.join(texts)
+            for bad in ('建议买', '建议卖', '可以买入', '赶紧', '稳赚', '必涨'):
+                self.assertNotIn(bad, text)
+            self.assertIn('不告诉你该买还是该卖', text)
+            st = panel.state_at(t, asof or None)
+            q = json.loads(http(self.s.port, f'/api/quant?ticker={t}&model={m}&asof={asof}')[1])
+            import narrate
+            allowed = narrate.allowed_numbers(st, narrate.build_facts(t, st['asof']), q['signal'], q['score'], q['lines'], q['history'], panel.backtest_summary(), 8, 15, 5)
+            self.assertEqual(narrate.bad_numbers(dict(hook=text, story='', final='', watch=[], steps=[]), allowed), [], (t, m, asof))
+        four = json.loads(http(self.s.port, '/api/learn?ticker=NVDA&model=four&asof=2025-05-13')[1])
+        self.assertEqual(four['headline']['tone'], 'go'); self.assertIn('不说“该买”', four['headline']['sub'])
+        self.assertEqual([c['ok'] for c in four['cards'] if c['id'] in ('e1', 'e2', 'e3', 'e4')], [True] * 4)
+        self.assertEqual(http(self.s.port, '/api/learn?ticker=XXXX')[0], 404)
+
     def test_ui_selftest_in_headless_chrome(self):
         chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
         if not os.path.exists(chrome):

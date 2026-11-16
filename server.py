@@ -8,6 +8,7 @@ GET  /api/avwap?ticker=&anchor=&asof=   手动锚定 VWAP 画线用
 GET  /api/ai/narrate?ticker=&asof=       视频式四问解说的模板版（不调用 API），外加上次 Claude 润色的版本（如果有）
 GET  /api/ai/cached?ticker=&asof=        这只标的这一天上次的 Claude 解说（本机保存），以及输入是否变过
 GET  /api/live?ticker=      盘中实时价和今天常规时段的未收盘 K 线（只画图，不参与判定）
+GET  /api/learn?ticker=&model=&asof=    「一键解释」学习面板：大白话讲这一天屏幕上的每样东西（程序拼的，不调用 AI）
 GET  /api/quant?ticker=&model=houshou|four&asof=   「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发
 POST /api/quant/narrate     这份结果的解说：模板（免费）或 Claude（body.claude 为真）
 POST /api/quant/anchor      后手模型的手动成本锚点（存 data/houshou_anchor.json）
@@ -30,6 +31,7 @@ from urllib.parse import parse_qs, urlparse
 
 import ai_explain
 import live
+import learn
 import narrate
 import panel
 import portfolio
@@ -283,6 +285,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {t: panel.freshness(t) for t in panel.TICKERS})
                 if u.path == '/api/ai/narrate':
                     return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None, q.get('model')))
+                if u.path == '/api/learn':        # 「一键解释」：把这一天的结果讲成大白话，不调用 AI
+                    return self._send(200, learn.build(q.get('ticker', ''), ai_model(q.get('model')), q.get('asof') or None))
                 if u.path == '/api/quant':
                     return self._send(200, quant.result(q.get('ticker', ''), ai_model(q.get('model') or 'houshou'), q.get('asof') or None))
                 if u.path == '/api/ai/cached':
