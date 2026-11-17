@@ -170,7 +170,9 @@
     await until(() => S.tf === 'D' && S.bars.tf === 'D' && fresh()); await frame();
     ok('weekly_back_to_daily', S.bars.d.length === day.d.length && S.bars.d[S.asof] === wd && !$('#evTf') && !$('[data-tool=avwap]').disabled);
     await replayTo('2025-05-13');
-    ok('freshness_chip', /数据截至 \d{4}-\d{2}-\d{2} 收盘 · 日线/.test($('#dataDate').textContent) && !$('#evStale'), $('#dataDate').textContent);
+    // 真实数据当天可能还没更新到位（来源晚出、某只票缺一根）：那时芯片应当如实写“数据未更新”，这同样算对。过期显示本身在 Freshness 测试里用受控数据单独测
+    const staleNow = /数据未更新：只到 \d{4}-\d{2}-\d{2}，缺 \d+ 个交易日/.test($('#dataDate').textContent);
+    ok('freshness_chip', staleNow || (/数据截至 \d{4}-\d{2}-\d{2} 收盘 · 日线/.test($('#dataDate').textContent) && !$('#evStale')), $('#dataDate').textContent);
 
     // 盘中实时：用模拟的盘中数据（美股收盘时也能测）。只多一根半透明 K 线和一行图例，别的都不变
     await replayTo(S.bars.d[S.bars.d.length - 1]); $('#rpExit').click(); await until(() => S.asof === S.bars.d.length - 1 && fresh()); await frame();
@@ -200,7 +202,7 @@
     // 回到最新
     $('#rpExit').click(); await until(() => S.asof === S.bars.d.length - 1 && fresh());
     ok('replay_exit', $('#replaybar').hidden && S.asof === S.bars.d.length - 1);
-    ok('data_date_shown', /数据截至 \d{4}-\d{2}-\d{2} 收盘/.test($('#dataDate').textContent) && /非实时/.test($('#dataDate').textContent), $('#dataDate').textContent);
+    ok('data_date_shown', /数据未更新：只到 \d{4}-\d{2}-\d{2}/.test($('#dataDate').textContent) || (/数据截至 \d{4}-\d{2}-\d{2} 收盘/.test($('#dataDate').textContent) && /非实时/.test($('#dataDate').textContent)), $('#dataDate').textContent);
     // ---- 持仓页（只在测试给了 pfhelper 时跑：测试用一个本机小服务去改临时目录里的持仓文件，真文件不碰）----
     const helper = fe.query.get('pfhelper');       // 地址栏会被页面改写，所以读启动时的查询串
     if (helper) {
@@ -320,29 +322,43 @@
       $('#modalClose').click();
       await pick('SPCX');
     }
-    // 「一键解释」学习面板：点一下出大白话解释，跟着标的和模型变，能把讲的东西指出来
+    // AI 对话（一键解释并在里面）：点一下出大白话解释，作为一条消息留在对话里；对话存档、能新建、能翻历史
     {
-      const LF = window.FELearn, QF = window.FEQuant;
-      ok('learn_closed_by_default', $('#learn').hidden && !LF.isOpen());
-      $('#learnBtn').click(); await until(() => LF.data() && LF.data().ticker === S.ticker, 8000);
-      const ld = LF.data(), cards = [...document.querySelectorAll('#learn .lcard')];
-      ok('learn_opens_with_plain_cards', !$('#learn').hidden && cards.length === ld.cards.length && cards.length >= 12 && !!$('#learn .learn-hl b').textContent &&
-        cards.every(a => a.querySelector('h4').textContent.length > 3 && a.querySelector('p').textContent.length > 20) && /不调用 AI/.test($('#learn .lfoot').textContent), cards.length);
-      ok('learn_says_today', document.querySelectorAll('#learn .lnow').length >= 8 && new RegExp(S.state.asof).test($('#learn').textContent));
-      ok('learn_chart_still_there', candle.data().length === S.bars.d.length && $('#chart').getBoundingClientRect().width > 300, $('#chart').getBoundingClientRect().width);
+      const CF = window.FEChat, QF = window.FEQuant;
+      ok('chat_closed_by_default', $('#learn').hidden && !CF.isOpen());
+      $('#learnBtn').click(); await until(() => CF.conv() && CF.conv().messages.length === 1 && document.querySelector('#learn .lcard'), 8000);
+      const cv = CF.conv(), lp = cv.messages[0].learn, cards = [...document.querySelectorAll('#learn .lcard')];
+      ok('explain_lands_in_chat_as_cards', !$('#learn').hidden && cv.messages[0].kind === 'explain' && cards.length === lp.cards.length && cards.length >= 12 && !!$('#learn .learn-hl b').textContent &&
+        cards.every(a => a.querySelector('h4').textContent.length > 3 && a.querySelector('p').textContent.length > 20) && /没花钱/.test($('#learn .cx-chip').textContent), cards.length);
+      ok('explain_says_today', document.querySelectorAll('#learn .lnow').length >= 8 && new RegExp(S.state.asof).test($('#learn').textContent));
+      ok('chat_chart_still_there', candle.data().length === S.bars.d.length && $('#chart').getBoundingClientRect().width > 300, $('#chart').getBoundingClientRect().width);
       document.querySelector('#learn .lcard[data-id=banner] .lspot').click();
-      ok('learn_points_at_things', $('#banner').classList.contains('learn-spot'));
+      ok('explain_points_at_things', $('#banner').classList.contains('learn-spot'));
       document.querySelector('#learn .lcard[data-id=e1] .lspot').click(); await frame();
-      ok('learn_points_at_evidence', $('#evidence').classList.contains('learn-spot') && S.flash && S.flash.k === 0, S.flash && S.flash.k);
-      const sel = $('#qModel'); sel.value = 'houshou'; sel.dispatchEvent(new Event('change', { bubbles: true }));
-      await until(() => LF.data() && LF.data().model_key === 'houshou', 8000);
-      ok('learn_follows_model', !!document.querySelector('#learn .lcard[data-id=h_idea]') && !document.querySelector('#learn .lcard[data-id=e1]') && /后手/.test($('#learn .learn-head').textContent));
-      sel.value = 'four'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => LF.data() && LF.data().model_key === 'four' && QF.fresh(), 8000);
-      await pick('QQQ'); await until(() => LF.data() && LF.data().ticker === 'QQQ', 8000);
-      ok('learn_follows_ticker', /QQQ/.test($('#learn .learn-head').textContent));
-      ok('learn_no_advice', !/建议买|建议卖|可以买入|赶紧/.test($('#learn').textContent) && /不告诉你该买还是该卖/.test($('#learn').textContent));
-      document.querySelector('#learn .learn-head button').click();
-      ok('learn_closes', $('#learn').hidden && !LF.isOpen());
+      ok('explain_points_at_evidence', $('#evidence').classList.contains('learn-spot') && S.flash && S.flash.k === 0, S.flash && S.flash.k);
+      ok('explain_no_advice', !/建议买|建议卖|可以买入|赶紧/.test($('#learn').textContent) && /不告诉你该买还是该卖/.test($('#learn').textContent));
+      // 换一只票再点一次：新的解释接在同一段对话后面，前一条不动
+      await pick('QQQ'); $('#chatExplain').click();
+      await until(() => CF.conv() && CF.conv().messages.length === 2, 8000);
+      const chips = [...document.querySelectorAll('#learn .cx-chip')].map(x => x.textContent);
+      ok('explain_appends_not_rewrites', chips.length === 2 && /SPCX|NVDA/.test(chips[0]) && /QQQ/.test(chips[1]) && CF.conv().id === cv.id, chips);
+      // 提问：没有密钥时输入框关着并说明原因；有密钥时能打字（真正的问答在后端测试里对着假服务跑）
+      ok('chat_input_matches_key', $('#chatInput').disabled === !S.meta.ai.enabled && (S.meta.ai.enabled || /没有设置 API 密钥/.test($('#chatInput').placeholder)) && !$('#chatExplain').disabled, $('#chatInput').placeholder);
+      // Markdown 只建节点：加粗、列表、表格、链接；脚本标签当普通文字
+      const fr = document.createElement('div'); fr.appendChild(CF.md('**结论**：先等\n\n- 第一条\n- 第二条\n\n| 项 | 值 |\n|---|---|\n| 止损 | 144.34 |\n\n<script>window.__x=1</script> [出处](https://example.com/a)'));
+      ok('chat_markdown_is_safe', !!fr.querySelector('strong') && fr.querySelectorAll('li').length === 2 && fr.querySelectorAll('td').length === 2 && !fr.querySelector('script') && window.__x === undefined &&
+        fr.querySelector('a').getAttribute('href') === 'https://example.com/a' && fr.querySelector('a').rel === 'noopener noreferrer', fr.innerHTML.slice(0, 200));
+      // 历史和新对话
+      $('#chatHistBtn').click(); await until(() => document.querySelector('#learn .chat-item'), 6000);
+      ok('chat_history_lists_saved', document.querySelectorAll('#learn .chat-item').length >= 1 && /一键解释/.test($('#learn .chat-item b').textContent) && $('#chatForm').hidden);
+      $('#chatNewBtn').click(); await frame();
+      ok('chat_new_is_empty', !CF.conv() && !!$('#learn .chat-empty') && !$('#chatForm').hidden);
+      $('#chatHistBtn').click(); await until(() => document.querySelector('#learn .chat-item .open'), 6000);
+      document.querySelector('#learn .chat-item .open').click(); await until(() => CF.conv() && CF.conv().id === cv.id && document.querySelectorAll('#learn .cx-chip').length === 2, 6000);
+      ok('chat_reopens_with_memory', CF.conv().messages.length === 2 && document.querySelectorAll('#learn .lcard').length >= 24);
+      $('#chatClose').click();
+      ok('chat_closes', $('#learn').hidden && !CF.isOpen());
+      // 切换模型不清空 AI 解读：另一个模型下分析过的那一份留在原处
       await pick('SPCX');
     }
     const ext = performance.getEntriesByType('resource').map(e => e.name).filter(u => new URL(u).host !== location.host && !(helper && new URL(u).port === helper));

@@ -40,7 +40,8 @@
   <span id="dataDate" class="chip chart-only" title="只有收盘后的日线，没有实时行情"></span>
   <button id="dataWarn" class="chip warn chart-only" hidden></button>
   <button id="refreshBtn" class="chart-only" title="运行 prep_data.py，只追加新日期">刷新数据</button>
-  <button id="learnBtn" class="chart-only" title="看不懂？点一下，用大白话把现在屏幕上的每样东西讲一遍。程序拼的，不花钱">？一键解释</button>
+  <button id="learnBtn" class="chart-only" title="看不懂？点一下，用大白话把现在屏幕上的每样东西讲一遍。程序拼的，不花钱；解释出现在 AI 对话里，可以接着问">？一键解释</button>
+  <button id="chatBtn" class="chart-only" title="一边看图一边问。有记忆，对话存在本机">AI 对话</button>
   <button id="aiBtn" class="primary chart-only">✦ AI 量化</button>
 </header>
 
@@ -59,7 +60,7 @@
     <button id="clearBtn" title="清空这只标的的全部手动画线"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg><span>清空</span></button>
   </nav>
 
-  <aside id="learn" hidden aria-label="一键解释"></aside>
+  <aside id="learn" hidden aria-label="AI 对话"></aside>
 
   <section id="stage">
     <div id="chartwrap">
@@ -125,6 +126,7 @@
         <div id="aiHint" class="muted small"></div>
         <div id="narrNotice" class="narr-notice" hidden></div>
         <div id="narr" hidden></div>
+        <details id="narrHist"><summary>分析记录（按天保存，点一行回到那一天）</summary><div class="nh-list"></div></details>
       </div>
 
       <div class="sec-title">◎ 规则模型信号</div>
@@ -154,7 +156,7 @@
 <script src="/static/portfolio.js"></script>
 <script src="/static/narrate.js"></script>
 <script src="/static/quant.js"></script>
-<script src="/static/learn.js"></script>
+<script src="/static/chat.js"></script>
 <script src="/static/notes.js"></script>
 <script src="/static/app.js"></script>
 </body>

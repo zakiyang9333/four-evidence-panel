@@ -9,11 +9,32 @@ window.FENarrate = (() => {
   const STEP_MS = 1000;
   let ctx = null, cur = null, timer = 0, shown = 0, busy = false, seq = 0, armed = 0, tried = '';
 
+  const MODEL = { four: '四证·抄底', houshou: '后手·成本线回踩' };
   const kilo = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
+  // 分析记录：按天保存的 AI 解读。点一行，回到那一天、那个模型，直接看保存的那一份（不计费）
+  async function loadHistory(onlyIfOpen) {
+    const box = $('#narrHist'); if (!box || !ctx) return;
+    if (onlyIfOpen && !box.open) return;
+    const list = box.querySelector('.nh-list'); 
+    try {
+      const r = await ctx.api('/api/ai/history?ticker=' + ctx.ticker());
+      list.textContent = '';
+      if (!r.days || !r.days.length) { list.appendChild(el('div', 'muted small', '这只标的还没有保存过 AI 解读。')); return; }
+      r.days.forEach(d => {
+        const b = el('button', 'nh-row');
+        b.appendChild(el('b', '', d.date)); b.appendChild(el('i', '', d.model_name)); b.appendChild(el('span', '', d.hook || ''));
+        b.title = '分析于 ' + (d.created_at || '') + (d.versions > 1 ? '，共 ' + d.versions + ' 版' : '') + '。点一下回到这一天看';
+        b.onclick = () => ctx.gotoDay(d.date, d.model);
+        list.appendChild(b);
+      });
+    } catch (e) { list.textContent = '记录没取到：' + e.message; }
+  }
+
   function init(c) {
     ctx = c;
+    const h = $('#narrHist'); if (h) h.addEventListener('toggle', () => { if (h.open) loadHistory(); });
     $('#aiRun').onclick = run;
     $('#aiPolish').onclick = () => polish(ctx.fake());
     $('#aiSkip').onclick = () => finish();
@@ -22,6 +43,7 @@ window.FENarrate = (() => {
 
   function reset() {            // 图表换了标的或日期：这段解说不再对应当前状态
     seq++; clearTimeout(timer); clearTimeout(armed); armed = 0; tried = ''; cur = null; shown = 0; busy = false;
+    const nh = $('#narrHist'); if (nh && nh.dataset.t !== (ctx ? ctx.ticker() : '')) { nh.open = false; nh.dataset.t = ctx ? ctx.ticker() : ''; }
     $('#narr').hidden = true; $('#narr').textContent = ''; $('#narrNotice').hidden = true; $('#narrWatch').hidden = true;
     $('#narrMeta').textContent = ''; $('#aiPolish').hidden = true; $('#aiSkip').hidden = true; $('#narrSrc').hidden = true;
     $('#aiRun').textContent = '✦ AI 分析';
@@ -37,17 +59,18 @@ window.FENarrate = (() => {
     if (cur && p) {
       b.hidden = false; b.disabled = busy || !p.enabled || !ready;
       b.textContent = armed ? '盘面没变，再点一次确认（会再次计费）' : cur.source !== 'claude' ? '让 Claude 润色（会计费）'
-        : upToDate() ? '重新分析' : '按新数据重新分析（会计费）';
+        : cur.from_other ? '用现在选的模型再分析一次（会计费）' : upToDate() ? '重新分析' : '按新数据重新分析（会计费）';
       b.title = p.enabled ? '把引擎事实交给 ' + p.model + ' 分析；数字会逐个核对，结论仍以引擎为准' : p.reason;
     }
     $('#aiHint').textContent = !cur ? (ctx && ctx.model() === 'houshou' ? '按后手战法的三问走一遍，再看一眼表盘。先出模板版，不花钱。' : '按视频的四问走一遍：量 → MACD → 扇子 → 成本线。先出模板版，不花钱。')
       : p && !p.enabled ? p.reason
-      : cur.source === 'claude' ? (upToDate() ? '这一版已存在本机：重播、切换标的、重开面板都不再计费。' : '这一版保存之后，数据或仓位变过。')
+      : cur.from_other ? '这一份是在「' + (MODEL[cur.rule_model] || '另一个') + '」模型下分析的。现在选的模型今天还没分析过，先把它留在这里。'
+      : cur.source === 'claude' ? (upToDate() ? '这一版已存在本机：重播、切换标的、切换模型、重开面板都不再计费。' : '这一版保存之后，数据或仓位变过。')
       : (p && p.positions ? '润色时会附上这只标的相关的 ' + p.positions + ' 个仓位，不发整份账户。' : '');
   }
 
   // 现在显示的是 Claude 的解说，而且之后盘面和仓位都没变过
-  const upToDate = () => !!cur && cur.source === 'claude' && cur.same_input !== false;
+  const upToDate = () => !!cur && cur.source === 'claude' && cur.same_input !== false && !cur.from_other;
 
   async function restore() {    // 记忆：这只标的这一天保存过 Claude 的解说，就直接显示（不播动画、不调用 API）
     if (!ctx || cur || busy || !ctx.ready() || !ctx.saved()) return;
@@ -57,8 +80,9 @@ window.FENarrate = (() => {
     const my = seq;
     try {
       const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + '&model=' + ctx.model());
-      if (my !== seq || cur || busy || !r.polished) return;
-      show(Object.assign({}, r.polished, { polish: r.polish }), false);
+      const saved = r.polished || r.other;        // 这个模型今天没分析过，就先显示另一个模型下分析的那一份：切换模型不清空
+      if (my !== seq || cur || busy || !saved) return;
+      show(Object.assign({}, saved, { polish: r.polish }), false);
     } catch (e) { /* 取不到就算了，点“AI 分析”还能再取 */ }
   }
 
@@ -78,7 +102,7 @@ window.FENarrate = (() => {
     if (upToDate() && !fake && !armed) {     // 盘面没变还要再分析一次：先问一句，5 秒内再点才真的去调用
       armed = setTimeout(() => { armed = 0; sync(); }, 5000); sync(); return;
     }
-    const force = cur.source === 'claude';   // 已经有 Claude 的版本还点，才是明确要重新分析；否则后端有保存的就直接给
+    const force = cur.source === 'claude' && !cur.from_other;   // 已经有这个模型的 Claude 版本还点，才是明确要重新分析；否则后端有保存的就直接给
     clearTimeout(armed); armed = 0;
     const my = ++seq, keep = cur.polish; busy = true; sync();
     const t0 = Date.now(), tick = setInterval(() => { $('#narrMeta').textContent = 'Claude 正在写… ' + Math.round((Date.now() - t0) / 1000) + ' 秒'; }, 500);
@@ -139,7 +163,8 @@ window.FENarrate = (() => {
         (res.tokens_in != null && res.tokens_out != null ? ' · 用了 ' + kilo(res.tokens_in) + ' 入 + ' + kilo(res.tokens_out) + ' 出 token' : '') +
         (res.cached && res.same_input === false ? ' · 之后数据或仓位变过，可能过时' : '')
       : '模板版 · 不调用 API';
-    $('#narrMeta').textContent = src + ' · ' + res.ticker + ' ' + res.asof;
+    $('#narrMeta').textContent = src + ' · ' + res.ticker + ' ' + res.asof + (res.source === 'claude' && res.rule_model ? ' · ' + (MODEL[res.rule_model] || '') : '');
+    if (res.source === 'claude' && !res.cached) loadHistory(true);          // 新分析了一份：分析记录跟着更新
     const tag = $('#narrSrc'); tag.hidden = false; tag.textContent = res.source === 'claude' ? 'Claude' : '模板'; tag.className = 'qtag' + (res.source === 'claude' ? ' pos' : '');
     const nt = $('#narrNotice'); nt.hidden = !res.notice; nt.textContent = res.notice || '';
     const w = $('#narrWatch'); w.textContent = ''; w.hidden = true;

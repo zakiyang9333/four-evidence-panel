@@ -602,7 +602,7 @@ async function fetchState() {
     renderEvidence(); renderSide(); syncPriceLines();
     window.FENarrate.restore();      // 这一天保存过 Claude 的解说就直接显示，不用再点、不再计费
     window.FEQuant.onState();        // 表盘、规则模型信号、结构线：按这一天重算
-    window.FELearn.onState();        // 「一键解释」开着的话，跟着这一天重写
+    window.FEChat.onState();        // 「一键解释」开着的话，跟着这一天重写
     window.FENotes.onState();        // 备注和时效：只给这一天以及之前的
     candle.applyOptions({ autoscaleInfoProvider: scaleProvider });
     S.rev++;
@@ -1080,7 +1080,8 @@ function bind() {
   window.FENarrate.init({
     api, toast, ticker: () => S.ticker, asof: () => asofDate(), ready: () => !!stateFresh(), flash: flashStep,
     model: () => window.FEQuant.model(),
-    saved: () => !!(stateFresh() && S.state.ai_saved && S.state.ai_saved[window.FEQuant.model()]),
+    saved: () => !!(stateFresh() && S.state.ai_saved && (S.state.ai_saved.four || S.state.ai_saved.houshou)),      // 任何一个模型今天分析过都算：切换模型不清空
+    gotoDay: (d, m) => { if (m && m !== window.FEQuant.model()) window.FEQuant.setModel(m); if (d === S.bars.d[lastIdx()]) setReplay(false); else setReplay(true, d); },
     fake: () => new URLSearchParams(location.search).get('aifake') === '1' || store.get('aifake', false),   // 测试开关：往 Claude 输出里塞假数字
     clearFlash,
     onReveal: n => { S.reveal = n; renderEvidence(); },      // 四问出到第几问，证据条就亮到第几条
@@ -1089,7 +1090,7 @@ function bind() {
     api, toast, S, store, esc, fmtP, C, rgba, X, Y, g: () => ctx, OV: () => OV, label, drawPolyline, stateFresh: () => !!stateFresh(), isDaily, asofDate, ptFromEvent,
     redraw: () => { S.rev++; }, resized: () => { setTimeout(() => tick(true), 0); }, replayTo: d => setReplay(true, d), refreshState: () => queueState(true),
     setAuto: on => { if (S.auto !== on) { S.auto = on; store.set('auto', on); renderTop(); syncPriceLines(); S.rev++; } },
-    modelChanged: () => { renderEvidence(); renderSide(); syncPriceLines(); S.rev++; window.FELearn.onState(); },
+    modelChanged: () => { renderEvidence(); renderSide(); syncPriceLines(); S.rev++; window.FEChat.onState(); },
     narr: window.FENarrate,
   });
   window.FENotes.init({
@@ -1097,11 +1098,12 @@ function bind() {
     redraw: () => { S.rev++; }, narr: window.FENarrate, aiEnabled: () => !!(S.meta && S.meta.ai && S.meta.ai.enabled),
     translateAuto: () => !!(S.meta && S.meta.ai && S.meta.ai.translate_auto),
   });
-  window.FELearn.init({
+  window.FEChat.init({
     api, toast, esc, S, stateFresh: () => !!stateFresh(), asofDate, model: () => window.FEQuant.model(), resized: () => { setTimeout(() => tick(true), 0); },
     flashEvidence: k => flashStep(k, '', 'learn' + k, [], false),
     flashPane: which => { const on = which === 'vol' ? S.ind.vol : S.ind.macd; if (on) flashPane(which === 'vol' ? ind.volPane : ind.macdPane); else toast('这排副图现在是关着的，在“指标”里打开就能看到。'); },
     openSide: () => { if (!S.sideOpen) { S.sideOpen = true; store.set('side', true); renderTop(); } },
+    store, aiEnabled: () => !!(S.meta && S.meta.ai && S.meta.ai.enabled), aiReason: () => (S.meta && S.meta.ai && S.meta.ai.reason) || '',
   });
   $('#refreshBtn').onclick = refreshData;
   $('#modalClose').onclick = () => { $('#modal').hidden = true; };

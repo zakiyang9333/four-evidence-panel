@@ -8,6 +8,10 @@ GET  /api/avwap?ticker=&anchor=&asof=   手动锚定 VWAP 画线用
 GET  /api/ai/narrate?ticker=&asof=       视频式四问解说的模板版（不调用 API），外加上次 Claude 润色的版本（如果有）
 GET  /api/ai/cached?ticker=&asof=        这只标的这一天上次的 Claude 解说（本机保存），以及输入是否变过
 GET  /api/live?ticker=      盘中实时价和今天常规时段的未收盘 K 线（只画图，不参与判定）
+GET  /api/ai/history?ticker=            按天保存的 AI 解读：哪些天分析过、哪个模型、那天的一句话
+GET  /api/chat/list | /api/chat/get?id=   AI 对话的列表和某一段的全部消息（存在本机 data/chats/）
+POST /api/chat/send         发一条消息，回答以 server-sent events 流式返回；整段对话的历史每次都带上（这就是记忆）
+POST /api/chat/explain | /delete        把一键解释作为一条消息放进对话（不调用 AI）；删一段对话
 GET  /api/notes?ticker=&asof=           K 线上的备注（事件日、新闻标题、联网搜到的、手写的）和各自的时效
 POST /api/notes/manual | /delete | /search   手写一条、删一条、让 Claude 联网查某几天（会计费，查过的不再查）
 POST /api/notes/translate   把存档里的英文新闻标题翻成中文并存下来（每条只翻一次）
@@ -25,6 +29,7 @@ POST /api/ai/analyze        Claude 解说（需要环境变量 ANTHROPIC_API_KEY
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -33,6 +38,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import ai_explain
+import chat
+import hashlib
 import live
 import learn
 import narrate
@@ -65,6 +72,7 @@ CFG = load_config()
 LIVE = live.LiveFeed(panel.TICKERS, enabled=bool(CFG.get('live_enabled', True)) and os.environ.get('FE_LIVE') != '0')
 _refresh_lock = threading.Lock()
 _ai_lock = threading.Lock()
+_chat_lock = threading.Lock()
 _last_refresh = None
 
 
@@ -151,6 +159,11 @@ def ai_narrate(t, asof, model='four'):
     rows = ai_cache_read(t, facts['asof'], x['model'])
     if rows:
         res['polished'] = saved_view(rows[0], x)
+    else:       # 这个模型今天没分析过，但另一个模型分析过：把那一份也给出去，切换模型时不至于一片空白
+        other = 'four' if x['model'] == 'houshou' else 'houshou'
+        orows = ai_cache_read(t, facts['asof'], other)
+        if orows:
+            res['other'] = dict(saved_view(orows[0], ai_inputs(t, asof, other)), from_other=True, rule_model=other)
     ok, why = ai_explain.status(CFG)
     res['polish'] = dict(enabled=ok, reason=why, model=CFG['ai_model'], positions=len(pos['positions']) if pos else 0)
     return res
@@ -194,6 +207,64 @@ def ai_cache_add(t, asof, entry, model='four'):
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(rows, f, ensure_ascii=False, indent=1)
     os.replace(tmp, _ai_cache_path(t, asof, model))
+
+
+MODEL_NAMES = dict(four='四证·抄底', houshou='后手·成本线回踩')
+
+
+def ai_history(t, limit=120):
+    """按天保存的 AI 解读：这只标的哪些天分析过、用的哪个模型、那天的一句话。只读本机 cache/ai/。"""
+    if t not in panel.TICKERS:
+        raise KeyError(t)
+    out = []
+    try:
+        names = os.listdir(AI_CACHE)
+    except OSError:
+        names = []
+    for n in names:
+        m = re.fullmatch(re.escape(t) + r'_(\d{4}-\d{2}-\d{2})(_houshou)?\.json', n)
+        if not m:
+            continue
+        model = 'houshou' if m.group(2) else 'four'
+        rows = ai_cache_read(t, m.group(1), model)
+        if rows:
+            r = rows[0]
+            out.append(dict(date=m.group(1), model=model, model_name=MODEL_NAMES[model], created_at=r.get('created_at'), versions=len(rows),
+                            hook=(r.get('narration') or {}).get('hook'), final=(r.get('narration') or {}).get('final')))
+    out.sort(key=lambda r: (r['date'], r['created_at'] or ''), reverse=True)
+    return dict(ok=True, ticker=t, days=out[:limit])
+
+
+def chat_context(t, asof, model):
+    """The chart data a chat message carries, and a key that changes when any of it does."""
+    x = ai_inputs(t, asof, ai_model(model))
+    f = x['facts']
+    rows = ai_cache_read(t, f['asof'], x['model']) or ai_cache_read(t, f['asof'], 'four' if x['model'] == 'houshou' else 'houshou')
+    reading = None
+    if rows:
+        n = rows[0].get('narration') or {}
+        reading = dict(created_at=rows[0].get('created_at'), headline=n.get('hook'), story=n.get('story'), conclusion=n.get('final'),
+                       steps=[dict(title=s.get('q'), says=s.get('say'), tag=s.get('sticker')) for s in n.get('steps') or []], watch=n.get('watch'))
+    body = dict(ticker=t, asof=f['asof'], is_latest=bool(x['q']['is_latest']), selected_model=x['q']['model_name'], engine=f,
+                bars=dict(columns=['date', 'open', 'high', 'low', 'close', 'volume'], rows=x['bars']), backtest=x['bt'], quant=x['qf'],
+                notes=x['notes'], saved_ai_reading=reading)
+    if x['pos']:
+        body.update(x['pos'])           # 只有这只标的相关的仓位，和 AI 解读发的是同一份
+    text = json.dumps(body, ensure_ascii=False, separators=(',', ':'), default=str)
+    key = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+    return text, key, f"{t} {f['asof']} · {x['q']['model_name']}"
+
+
+def chat_explain(body):
+    """一键解释进对话框：程序拼的，不调用 AI，作为一条助手消息存进对话。"""
+    t = body.get('ticker', '')
+    lp = learn.build(t, ai_model(body.get('model')), body.get('asof') or None)
+    conv = chat.load(body.get('id') or '') or chat.new(t)
+    if not conv['messages']:
+        conv['title'] = '一键解释 · ' + lp['ticker'] + ' ' + lp['asof'][5:]
+    conv['messages'].append(dict(role='assistant', kind='explain', at=chat.now_text(), text=chat.explain_text(lp), learn=lp))
+    chat.save(conv)
+    return dict(ok=True, conv=chat.public(conv))
 
 
 def ai_cached(t, asof):
@@ -333,6 +404,73 @@ class Handler(BaseHTTPRequestHandler):
             return urlparse(origin).hostname in ('localhost', '127.0.0.1')
         return True
 
+    def _sse(self, event, data):
+        self.wfile.write(('event: %s\ndata: %s\n\n' % (event, json.dumps(data, ensure_ascii=False, separators=(',', ':')))).encode('utf-8'))
+        self.wfile.flush()
+
+    def _chat_send(self, body):
+        """One chat turn, streamed to the page as server-sent events: start, delta..., then done or error.
+        The user's message is saved before the call and the reply after it, so nothing is lost if the page goes away mid-answer."""
+        t, text = body.get('ticker', ''), str(body.get('text') or '').strip()
+        if t not in panel.TICKERS:
+            raise KeyError(t)
+        if not text:
+            raise ValueError('问题是空的')
+        if len(text) > chat.MAX_TEXT:
+            raise ValueError(f'这条太长了（最多 {chat.MAX_TEXT} 个字），分几条问')
+        ok, why = ai_explain.status(CFG)
+        if not ok:
+            return self._send(200, dict(ok=False, error=why, code='disabled'))
+        if not _chat_lock.acquire(blocking=False):
+            return self._send(409, dict(ok=False, error='上一条还没答完。'))
+        try:
+            conv = chat.load(body.get('id') or '') or chat.new(t)
+            ctx, key, chip = chat_context(t, body.get('asof') or None, body.get('model'))
+            attach = key != conv.get('ctx_key')        # 图表数据变了（换了标的、日期、模型，或多了备注）才再带一份
+            if not any(m['role'] == 'user' for m in conv['messages']) and (not conv['messages'] or conv['title'] == '新对话'):
+                conv['title'] = chat.title_from(text)
+            conv['messages'].append(dict(role='user', at=chat.now_text(), text=text, context=ctx if attach else None, chip=chip if attach else None))
+            conv.update(ctx_key=key, ticker=t)
+            chat.save(conv)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.close_connection = True
+            acc, info, err = [], None, None
+            try:
+                self._sse('start', dict(id=conv['id'], title=conv['title'], chip=chip if attach else None))
+                for kind, val in ai_explain.chat_stream(chat.SYSTEM, chat.api_messages(conv), CFG, web=bool(body.get('web'))):
+                    if kind == 'delta':
+                        acc.append(val)
+                        self._sse('delta', dict(text=val))
+                    elif kind == 'done':
+                        info = val
+                    else:
+                        err = val
+            except (BrokenPipeError, ConnectionError):      # 页面那头点了“停止”或者关掉了：把已经说出来的部分存下
+                err = '已停止'
+            reply = ''.join(acc)
+            if reply.strip():
+                meta = dict(info or {}, interrupted=info is None)
+                conv['messages'].append(dict(role='assistant', at=chat.now_text(), text=reply, meta=meta))
+                u = conv.setdefault('usage', dict(tokens_in=0, tokens_out=0, cache_read=0, calls=0))
+                if info:
+                    u['tokens_in'] += info['tokens_in']; u['tokens_out'] += info['tokens_out']; u['cache_read'] += info.get('cache_read', 0); u['calls'] += 1
+                    u['cache_write'] = u.get('cache_write', 0) + info.get('cache_write', 0)
+            chat.save(conv)
+            try:
+                if err and err != '已停止':
+                    self._sse('error', dict(error=err, conv=chat.public(conv)))
+                elif not err:
+                    self._sse('done', dict(conv=chat.public(conv)))
+            except (BrokenPipeError, ConnectionError):
+                pass
+        finally:
+            _chat_lock.release()
+
     def do_GET(self):
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -357,6 +495,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, learn.build(q.get('ticker', ''), ai_model(q.get('model')), q.get('asof') or None))
                 if u.path == '/api/quant':
                     return self._send(200, quant.result(q.get('ticker', ''), ai_model(q.get('model') or 'houshou'), q.get('asof') or None))
+                if u.path == '/api/ai/history':
+                    return self._send(200, ai_history(q.get('ticker', '')))
+                if u.path == '/api/chat/list':
+                    return self._send(200, dict(ok=True, chats=chat.listing()))
+                if u.path == '/api/chat/get':
+                    conv = chat.load(q.get('id', ''))
+                    return self._send(200, dict(ok=True, conv=chat.public(conv)) if conv else dict(ok=False, error='没有这段对话。'))
                 if u.path == '/api/ai/cached':
                     return self._send(200, ai_cached(q.get('ticker', ''), q.get('asof') or None))
                 if u.path == '/api/state':
@@ -414,6 +559,12 @@ class Handler(BaseHTTPRequestHandler):
                 if body.get('claude'):
                     return self._send(*ai_analyze(body))
                 return self._send(200, ai_narrate(body.get('ticker', ''), body.get('asof') or None, body.get('model') or 'houshou'))
+            if u.path == '/api/chat/send':
+                return self._chat_send(body)
+            if u.path == '/api/chat/explain':
+                return self._send(200, chat_explain(body))
+            if u.path == '/api/chat/delete':
+                return self._send(200, dict(ok=True, removed=chat.delete(body.get('id', ''))))
             if u.path == '/api/notes/manual':
                 t = body.get('ticker', '')
                 item = notes.add_manual(t, body.get('date', ''), body.get('text', ''))

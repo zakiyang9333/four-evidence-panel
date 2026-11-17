@@ -227,7 +227,9 @@ class Server:
         self.empty = tempfile.mkdtemp(prefix='fe_nopf_')      # 默认给一个空的持仓目录：测试不读真的持仓文件
         self.cache = tempfile.mkdtemp(prefix='fe_aicache_')   # AI 解读也存到临时目录，不碰 cache/ai
         self.notes = tempfile.mkdtemp(prefix='fe_notes_')     # 备注也存到临时目录，不碰 data/notes，不连 Yahoo
-        e.update(FE_PORT=str(self.port), FE_PORTFOLIO_DIR=self.empty, FE_CACHE_DIR=self.cache, FE_LIVE='0', FE_NOTES_DIR=self.notes, FE_NOTES_OFFLINE='1')   # 测试不连 Yahoo
+        self.chats = tempfile.mkdtemp(prefix='fe_chats_')     # 对话记录同样放临时目录
+        e.update(FE_PORT=str(self.port), FE_PORTFOLIO_DIR=self.empty, FE_CACHE_DIR=self.cache, FE_LIVE='0', FE_NOTES_DIR=self.notes, FE_NOTES_OFFLINE='1',
+                 FE_CHAT_DIR=self.chats)   # 测试不连 Yahoo
         e.update(env or {})
         self.p = subprocess.Popen([sys.executable, os.path.join(ROOT, 'server.py')], cwd=ROOT, env=e, stdout=self.log, stderr=subprocess.STDOUT)
         for _ in range(100):
@@ -245,7 +247,7 @@ class Server:
 
     def stop(self):
         self.p.terminate(); self.p.wait(10); self.log.close(); os.unlink(self.log.name)
-        shutil.rmtree(self.empty, ignore_errors=True); shutil.rmtree(self.cache, ignore_errors=True); shutil.rmtree(self.notes, ignore_errors=True)
+        shutil.rmtree(self.empty, ignore_errors=True); shutil.rmtree(self.cache, ignore_errors=True); shutil.rmtree(self.notes, ignore_errors=True); shutil.rmtree(self.chats, ignore_errors=True)
 
 
 class NoKey(unittest.TestCase):
@@ -552,9 +554,14 @@ class Freshness(unittest.TestCase):
             self.assertEqual(panel.expected_last_session(self.at(now)), want, now)
 
     def test_lag_counts_sessions_not_days(self):
-        f = panel.freshness('SPCX', self.at('2026-11-16 21:00'))
-        self.assertEqual((f['last'], f['expected'], f['lag_sessions'], f['stale']), ('2026-11-13', '2026-11-16', 1, True))
-        f = panel.freshness('SPCX', self.at('2026-11-15 12:00'))
+        # 不写死日期：真实数据每天往后长。取现在的最后一根，再找它之后的下一个交易日
+        last = panel.load('SPCX')['B']['d'][-1]
+        nxt = datetime.date.fromisoformat(last) + datetime.timedelta(days=1)
+        while not panel.is_session(nxt):
+            nxt += datetime.timedelta(days=1)
+        f = panel.freshness('SPCX', self.at(f'{nxt} 21:00'))             # 下一个交易日收盘很久之后：差一根，算过期
+        self.assertEqual((f['last'], f['expected'], f['lag_sessions'], f['stale']), (last, str(nxt), 1, True))
+        f = panel.freshness('SPCX', self.at(f'{nxt} 12:00'))             # 下一个交易日盘中：那根还没收盘，不算过期
         self.assertFalse(f['stale']); self.assertTrue(f['calendar_known'])
         self.assertFalse(panel.freshness('SPCX', self.at('2028-03-01 12:00'))['calendar_known'])
 

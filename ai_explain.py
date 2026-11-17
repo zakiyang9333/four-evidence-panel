@@ -276,3 +276,62 @@ def translate_titles(titles, cfg):
     except Exception as e:      # noqa: BLE001
         return dict(ok=False, code='error', error=f'翻译失败：{type(e).__name__}')
 
+
+# ---------- AI 对话：一个字一个字往外吐 ----------
+
+def chat_stream(system, messages, cfg, web=False):
+    """Generator of ('delta', text) ... then ('done', info) or ('error', message). The caller forwards deltas to the page as they come."""
+    ok, why = status(cfg)
+    if not ok:
+        yield 'error', why
+        return
+    import anthropic
+    key = os.environ['ANTHROPIC_API_KEY'].strip()
+    scrub = lambda s: str(s).replace(key, '***')
+    client = anthropic.Anthropic(api_key=key, timeout=float(cfg.get('ai_timeout_s', 180)), max_retries=1)
+    kw = dict(model=cfg.get('ai_chat_model') or cfg['ai_model'], max_tokens=int(cfg.get('ai_chat_max_tokens', 16000)), system=system,
+              output_config={'effort': cfg.get('ai_chat_effort', 'medium')})
+    if web:         # 联网搜索：基础版工具（原因见 search_days）。模型自己决定搜不搜
+        kw['tools'] = [{'type': cfg.get('ai_search_tool', 'web_search_20250305'), 'name': 'web_search', 'max_uses': int(cfg.get('ai_chat_search_uses', 3))}]
+    msgs = list(messages)
+    tin = tout = cread = cwrite = searches = 0
+    sources = []
+    try:
+        for _ in range(4):
+            with client.messages.stream(messages=msgs, **kw) as stream:
+                for text in stream.text_stream:
+                    yield 'delta', text
+                msg = stream.get_final_message()
+            u = getattr(msg, 'usage', None)
+            tin += getattr(u, 'input_tokens', 0) or 0
+            tout += getattr(u, 'output_tokens', 0) or 0
+            cread += getattr(u, 'cache_read_input_tokens', 0) or 0
+            cwrite += getattr(u, 'cache_creation_input_tokens', 0) or 0
+            for b in msg.content:
+                if getattr(b, 'type', '') == 'server_tool_use':
+                    searches += 1
+                for cit in (getattr(b, 'citations', None) or []):
+                    url, title = getattr(cit, 'url', None), getattr(cit, 'title', None)
+                    if url and url not in [x['url'] for x in sources]:
+                        sources.append(dict(url=url, title=title or url))
+            if msg.stop_reason != 'pause_turn':
+                break
+            msgs = list(messages) + [{'role': 'assistant', 'content': msg.content}]        # 服务器端搜索到上限停住了：原样送回去让它接着做
+        if msg.stop_reason == 'refusal':
+            yield 'error', '模型拒绝回答这个问题。'
+            return
+        yield 'done', dict(model=msg.model, tokens_in=tin, tokens_out=tout, cache_read=cread, cache_write=cwrite, searches=searches, sources=sources[:8],
+                           truncated=msg.stop_reason == 'max_tokens')
+    except anthropic.AuthenticationError:
+        yield 'error', 'API 密钥无效（401）。'
+    except anthropic.RateLimitError:
+        yield 'error', '请求太频繁或额度用完了（429），稍后再试。'
+    except anthropic.APIStatusError as e:
+        yield 'error', f'接口报错（{e.status_code}）：{scrub(getattr(e, "message", ""))[:200]}'
+    except anthropic.APIConnectionError:
+        yield 'error', '连不上 Anthropic 的接口，检查网络或代理。'
+    except (BrokenPipeError, ConnectionError):
+        raise
+    except Exception as e:      # noqa: BLE001
+        yield 'error', f'对话失败：{type(e).__name__}'
+
