@@ -71,7 +71,7 @@ window.FEChat = (() => {
     head.appendChild(el('span', 'spacer'));
     const hb = el('button', '', '历史'); hb.id = 'chatHistBtn'; hb.title = '以前的对话'; hb.onclick = () => (view === 'list' ? showChat() : showList());
     const nb = el('button', '', '＋ 新对话'); nb.id = 'chatNewBtn'; nb.onclick = newChat;
-    const xb = el('button', '', '✕'); xb.id = 'chatClose'; xb.title = '收起'; xb.onclick = () => toggle(false);
+    const xb = el('button', '', '✕'); xb.id = 'chatClose'; xb.title = '回到「分析」页'; xb.onclick = () => toggle(false);
     head.appendChild(hb); head.appendChild(nb); head.appendChild(xb);
     const body = el('div', 'chat-body'); body.id = 'chatBody';
     const quick = el('div', 'chat-quick'); quick.id = 'chatQuick';
@@ -90,22 +90,32 @@ window.FEChat = (() => {
     form.addEventListener('submit', e => { e.preventDefault(); if (streaming) stop(); else { const t = ta.value; if (t.trim()) { ta.value = ''; send(t); } } });
     ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
     box.appendChild(head); box.appendChild(body); box.appendChild(quick); box.appendChild(form);
-    $('#learnBtn').onclick = () => { toggle(true); explain(); };
+    $('#learnBtn').onclick = async () => { await toggle(true); explain(); };
     $('#chatBtn').onclick = () => toggle(!open);
     const q = new URLSearchParams(location.search);
     if (q.get('chatid')) c.store.set('chat.id', q.get('chatid'));       // ?chatid=…：直接打开某一段对话
     if (q.get('chat') === '1') toggle(true);
-    if (q.get('learn') === '1') { toggle(true); const go = () => { if (c.stateFresh()) explain(); else setTimeout(go, 120); }; go(); }
+    if (q.get('learn') === '1') { const go = () => { if (c.stateFresh()) explain(); else setTimeout(go, 120); }; toggle(true).then(go); }
   }
 
+  /* 对话住在「AI 量化」窗口的「对话」页签里。打开 = 展开窗口并切到这一页；收起 = 回到「分析」页。 */
+  let pending = Promise.resolve();
   async function toggle(on) {
+    if (on) { c.openSide(); c.setTab('chat'); await pending; }
+    else if (c.tab() === 'chat') c.setTab('analyze');
+    else shown(false);
+  }
+  /* 页签被点开或离开时，窗口那边会告诉这里一声 */
+  function shown(on) {
     open = !!on;
     $('#learn').hidden = !open;
     $('#chatBtn').classList.toggle('on', open);
-    c.resized();
-    if (!open) return;
-    if (!conv) { const id = c.store.get('chat.id', null); if (id) await load(id, true); }
-    showChat();
+    if (!open) return pending;
+    pending = (async () => {
+      if (!conv) { const id = c.store.get('chat.id', null); if (id) await load(id, true); }
+      showChat();
+    })();
+    return pending;
   }
 
   async function load(id, quiet) {
@@ -255,7 +265,7 @@ window.FEChat = (() => {
     };
     try {
       const r = await fetch('/api/chat/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal,
-        body: JSON.stringify({ id: conv.id, ticker: c.S.ticker, asof: c.asofDate(), model: c.model(), text, web }) });
+        body: JSON.stringify(Object.assign({ id: conv.id, ticker: c.S.ticker, asof: c.asofDate(), text, web }, c.profile())) });
       if ((r.headers.get('Content-Type') || '').indexOf('event-stream') < 0) { const j = await r.json(); throw new Error(j.error || ('HTTP ' + r.status)); }
       const reader = r.body.getReader(), dec = new TextDecoder();
       let buf = '';
@@ -281,7 +291,7 @@ window.FEChat = (() => {
     if (streaming) return;
     if (!c.stateFresh()) { c.toast('图表还在加载，稍等一下。', true); return; }
     try {
-      const r = await c.api('/api/chat/explain', { id: conv && conv.id, ticker: c.S.ticker, asof: c.asofDate(), model: c.model() });
+      const r = await c.api('/api/chat/explain', Object.assign({ id: conv && conv.id, ticker: c.S.ticker, asof: c.asofDate() }, c.profile()));
       if (r.ok === false) throw new Error(r.error);
       conv = r.conv; c.store.set('chat.id', conv.id);
       showChat();
@@ -291,7 +301,16 @@ window.FEChat = (() => {
   }
 
   // “指给我看”：把这张卡片讲的那样东西在屏幕上圈出来
-  const SIDE = { sig: '#sigCard', tiles: '#tiles', gauge: '#qScore', narr: '#narrCard', hist: '#qHist' };
+  /* 窗口里的东西分在几个页签里：先切到那一页，再圈出来 */
+  const SIDE = { sig: ['analyze', '#sigCard'], tiles: ['analyze', '#tiles'], gauge: ['analyze', '#qChartCard'], narr: ['analyze', '#narrCard'], qa: ['analyze', '#qaCard'],
+    hist: ['models', '#qHist', '#sigList'] };
+  function goSide(tab, sels) {
+    c.openSide(); c.setTab(tab);
+    setTimeout(() => {
+      if (sels.some(outline)) c.toast('已切到「' + (tab === 'models' ? '模型' : '分析') + '」页指给你看。看完点「对话」回来。');
+      else c.toast('这一块现在没有显示。');
+    }, 60);
+  }
   function outline(sel) {
     const t = $(sel); if (!t || t.hidden) return false;
     if (t.tagName === 'DETAILS') t.open = true;
@@ -306,10 +325,10 @@ window.FEChat = (() => {
     if (key === 'banner') return outline('#banner');
     if (key === 'top') return outline('#topbar');
     if (key === 'chart' || key === 'highlow') return outline('#chartwrap');
-    if (key === 'bar') { if (!outline('#qBar')) { c.openSide(); outline('#sigCard'); } return; }
-    if (SIDE[key]) { c.openSide(); if (!outline(SIDE[key])) c.toast('这一块现在没有显示。'); }
+    if (key === 'bar') { if (!outline('#qBar')) goSide('analyze', ['#sigCard']); return; }
+    if (SIDE[key]) goSide(SIDE[key][0], SIDE[key].slice(1));
   }
 
   const onState = () => { if (open) sync(); };
-  return { init, toggle, onState, send, stop, explain, newChat, showList, isOpen: () => open, conv: () => conv, streaming: () => streaming, md, spot };
+  return { init, toggle, shown, onState, send, stop, explain, newChat, showList, isOpen: () => open, conv: () => conv, streaming: () => streaming, md, spot };
 })();

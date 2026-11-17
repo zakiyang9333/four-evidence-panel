@@ -1,0 +1,165 @@
+/* 「AI 量化」窗口：照录屏的版式排的（窗口头部、四个页签、分析卡、四步进度、表盘卡、信号卡和六格）。
+   在 app.css 之后加载，只管这个窗口里的东西。颜色沿用面板自己的那一套（成本线黄、止损紫、目标粉），和图上的线、图例里的说法对得上。 */
+
+/* ---------- 窗口 ---------- */
+#side{width:432px;background:#141821;transition:width .16s ease-out}
+#side.wide{width:min(760px,54vw)}
+.side-body[hidden]{display:none}
+.sec-title.first{margin-top:0}
+.qw-head{gap:6px;padding:9px 8px 8px 12px;border-bottom:0;min-width:0}
+.qw-head .menu{min-width:0}
+#qTfMenu{flex:0 1 auto}
+#qTfText{overflow:hidden;text-overflow:ellipsis}
+.qw-head b{font-size:14.5px;letter-spacing:.3px;white-space:nowrap}
+.qw-head .dot{box-shadow:0 0 0 3px #19b5f022}
+.qw-head .qw-pill{display:inline-flex;align-items:center;gap:5px;max-width:100%;min-width:0;border:1px solid var(--line);background:#1b212d;border-radius:999px;padding:3px 9px 3px 10px;font-size:11.5px;color:#c9ced9;white-space:nowrap}
+.qw-head .qw-pill:hover,.qw-head .qw-pill[aria-expanded=true]{border-color:#3d4860;color:var(--fg)}
+.chev{display:inline-block;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px);opacity:.75;margin-left:2px}
+.qw-head .qw-term{display:inline-flex;align-items:center;gap:6px;border:1px solid #1d6c8a;background:#0f2530;color:#d8f3ff;border-radius:999px;padding:3px 10px 3px 6px;font-size:12px;font-weight:600;white-space:nowrap}
+.qw-head .qw-term:hover{border-color:var(--acc);background:#123240}
+.term-ico{display:inline-block;width:16px;height:16px;border-radius:4px;background:var(--acc);position:relative}
+.term-ico::after{content:"";position:absolute;left:4px;top:4px;width:6px;height:6px;border:1.5px solid #04202c;border-radius:1.5px}
+.ext{display:inline-block;width:7px;height:7px;border-top:1.5px solid currentColor;border-right:1.5px solid currentColor;opacity:.7;margin-left:1px;transform:translateY(-1px)}
+.qw-head .qw-ico{width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;color:#9aa3b5}
+.qw-head .qw-ico:hover,.qw-head .qw-ico.on{background:#232a38;color:var(--fg)}
+.qw-ico svg,.qw-tabs svg,.dir svg,.chip-dir svg,.chip-hz svg,.m-side svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#side .pop{min-width:232px;max-width:300px;display:flex;flex-direction:column;gap:6px;box-shadow:0 10px 30px #000b;font-size:12.5px}
+#side .pop[hidden]{display:none}
+#side .pop.right{left:auto;right:0}
+.pop-title{color:var(--mut);font-size:11px;margin-top:2px}
+.pop-item{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;white-space:normal;border-radius:8px;padding:6px 9px;background:transparent}
+.pop-item b{font-size:13px}.pop-item small{color:var(--mut);font-size:11px;line-height:1.35}
+.pop-item.on{border-color:var(--acc);background:#10303d}.pop-item.on b{color:#bfeaff}
+.pop-note{margin:0;color:var(--mut);font-size:11px;line-height:1.5}
+#qSetPop .q-lines{grid-template-columns:1fr;max-height:190px;overflow-y:auto;margin-top:2px}
+#qSetPop label{font-size:12px}
+
+/* ---------- 页签 ---------- */
+.qw-tabs{flex:none;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:2px 10px 8px;border-bottom:1px solid var(--line)}
+.qw-tabs button{position:relative;display:flex;align-items:center;justify-content:center;gap:6px;border:0;background:transparent;border-radius:10px;padding:8px 4px;font-size:13.5px;color:#8f98ab}
+.qw-tabs button:hover{color:var(--fg)}
+.qw-tabs button.on{background:#1f2634;color:#eaf7ff;font-weight:700;box-shadow:inset 0 0 0 1px #2c3547}
+.qw-tabs button.on svg{color:var(--acc)}
+.qw-dot{position:absolute;top:4px;right:10px;min-width:15px;height:15px;border-radius:999px;background:#ef4444;color:#fff;font-style:normal;font-size:10px;line-height:15px;padding:0 4px;font-weight:700}
+.qw-dot[hidden]{display:none}
+
+/* ---------- 分析卡 ---------- */
+.card.qa{border-color:#1f5a70;border-radius:14px;background:linear-gradient(180deg,#152330 0%,#171c26 70%);padding:13px 13px 11px}
+.qa-row{gap:7px;margin-bottom:7px}
+.pill.sel{position:relative;border-radius:999px;padding:4px 24px 4px 11px;background:#12161f;border-color:#2a3242;cursor:pointer;max-width:100%;min-width:0}
+.pill.sel:hover{border-color:#3d4860}
+.pill.sel::after{content:"";position:absolute;right:10px;top:50%;width:6px;height:6px;border-right:1.5px solid #9aa3b5;border-bottom:1.5px solid #9aa3b5;transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.pill.sel select{-webkit-appearance:none;appearance:none;cursor:pointer;max-width:176px;text-overflow:ellipsis;padding:0;margin:0}
+.pill.sel select option{background:#1f2430;color:var(--fg)}
+.seg.dir{border:1px solid #2a3242;border-radius:999px;background:#12161f;padding:2px;gap:2px}
+.seg.dir button,.seg.dir button:first-child,.seg.dir button:last-child{display:inline-flex;align-items:center;gap:5px;border:0;margin:0;border-radius:999px;background:transparent;color:#77819a;padding:3px 11px 3px 9px;font-size:12.5px;font-weight:600}
+.seg.dir button:hover{color:var(--fg)}
+.seg.dir button.on{background:#273042;color:#fff;box-shadow:inset 0 0 0 1px #3a465c}
+.seg.dir button#qLong.on svg{color:#f0484e}.seg.dir button#qShort.on svg{color:#1fa391}
+#qRun.big{width:100%;margin:5px 0 7px;padding:10px 12px;border-radius:10px;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px}
+#qRun.big.busy{background:#1d5d73;border-color:#1d5d73;color:#eaf7ff;opacity:1}
+#qRun .spin,.q-steps .run i{display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid #ffffff44;border-top-color:#fff;animation:qspin .8s linear infinite}
+
+/* ---------- 四步进度：2×2 ---------- */
+#qSteps{border-radius:14px;padding:11px 12px 12px;background:#171c26}
+.q-steps-head{margin-bottom:9px}.q-steps-head b{font-size:13.5px}
+.q-steps{gap:8px}
+.q-steps>div{border-radius:10px;padding:8px 9px;gap:7px;background:#12161f;opacity:.5;min-height:52px}
+.q-steps>div.run{border-color:#2b8fb0;box-shadow:0 0 0 1px #19b5f033}
+.q-steps .run i{border-color:#19b5f044;border-top-color:var(--acc);line-height:9px}
+.q-steps b{font-size:12.5px}.q-steps small{font-size:11px;line-height:1.35;margin-top:1px}
+
+/* ---------- 当前图表 ---------- */
+.card.qchart{border-radius:14px;padding:12px 13px 10px;background:#171c26}
+.qc-head{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px}
+.qc-head>div{flex:1;min-width:0}.qc-head b{display:block;font-size:14.5px}.qc-head small{color:var(--mut);font-size:11px}
+.qc-head .qtag{margin:2px 0 0;white-space:nowrap}
+.q-range{display:block;color:var(--mut);font-size:10px;margin-top:3px}
+.q-total{font-size:28px}
+
+/* ---------- 规则模型信号 ---------- */
+#sigCard{border-radius:14px;padding:13px 14px 11px;background:#171c26}
+#sigCard h3{font-size:25px;letter-spacing:.5px}
+#sigCard h3.ready,#sigCard h3.watch,#sigCard h3.risk{color:#3dd6ff}#sigCard h3.wait{color:var(--fg)}#sigCard h3.avoid{color:#fca5a5}#sigCard h3.na{color:#aab1c2}#sigCard h3.dead{color:#c08a8a}
+#sigCard .tags{align-items:center}
+#sigCard .tags span{display:inline-flex;align-items:center;gap:4px;border-radius:6px;padding:2px 8px;font-size:11.5px}
+#sigCard .tags .chip-dir{font-weight:700;color:#fff;background:#273042}
+#sigCard .tags .chip-dir.long svg{color:#f0484e}#sigCard .tags .chip-dir.short svg{color:#1fa391}
+#sigCard .tags .chip-hz{background:transparent;color:#c5cbd8;padding-left:2px}
+#sigCard .tags svg{width:13px;height:13px}
+.sig-use{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px}
+.sig-use button{border-radius:999px;font-size:12px;color:var(--acc);border-color:#1d4d63;background:#0f2530;white-space:normal;text-align:left}
+.tiles{grid-template-columns:repeat(4,1fr);gap:8px}
+.tile{border-radius:12px;padding:9px 10px 8px;background:#171c26}
+.tile[data-k="zone"],.tile.w2{grid-column:span 2}
+.tile b{font-size:16.5px}
+.tile.sm b,.tile[data-k="stop"] b,.tile[data-k="t2"] b{font-size:14px;line-height:1.6}
+.tile[data-k="zone"] b{font-size:15px;line-height:1.5;color:var(--vwap)}
+.tile small{white-space:normal;overflow-wrap:anywhere}
+.posnote{font-size:12px;line-height:1.6;color:#d7dbe5;border-left:3px solid var(--acc)}
+.posnote[hidden]{display:none}
+
+/* ---------- 对话页签 ---------- */
+#qPaneChat{padding:0;gap:0;overflow:hidden}
+#learn{width:auto;flex:1;border:0;background:transparent;min-height:0}
+#qPaneChat #learn{position:static;box-shadow:none}
+
+/* ---------- 模型页签 ---------- */
+.mcard{border-radius:14px;padding:11px 12px 10px;background:#171c26}
+.mcard.on{border-color:#1f6f8a;background:linear-gradient(180deg,#152330 0%,#171c26 60%)}
+.m-head{display:flex;align-items:center;gap:7px}
+.m-head b{font-size:14px}
+.m-badge{font-size:10.5px;border:1px solid #5a4a12;color:var(--hazard);border-radius:999px;padding:0 7px;white-space:nowrap}
+.m-cur{font-size:11px;color:var(--acc);font-weight:700;white-space:nowrap}
+.m-head button{font-size:12px;border-radius:999px;padding:2px 10px;color:var(--acc);border-color:#1d4d63;background:#0f2530}
+.m-what{margin:6px 0 8px;font-size:12.5px;line-height:1.6;color:#d0d5e0}
+.m-sides{display:flex;flex-direction:column;gap:5px;margin-bottom:6px}
+.m-side{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:4px 9px;font-size:12px;background:#12161f;color:#c9ced9;text-align:left;white-space:normal;font-style:normal}
+button.m-side:hover{border-color:#3d4860}
+.m-side.cur{box-shadow:inset 0 0 0 1px var(--acc)}
+.m-side.ready{border-color:#1f6f8a;color:#3dd6ff;background:#0f2530}
+.m-side.avoid{color:#fca5a5}.m-side.dead{color:#c08a8a}.m-side.na,.m-side.off{color:#7d8598}
+.m-side.off{border-style:dashed}
+.mcard details{font-size:12px}.mcard summary{cursor:pointer;color:var(--mut)}
+.mcard .fine,#qModelDetail .fine,#qPaneTasks .fine{color:var(--mut);font-size:11px;line-height:1.5;margin:5px 0 0}
+.m-checks{display:flex;gap:5px;flex-wrap:wrap;margin:6px 0 2px}
+.m-checks span{background:#232a38;border-radius:6px;padding:1px 8px;font-size:11.5px}
+.m-params td:nth-child(2){text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.m-params td:nth-child(3){width:38px;text-align:right}
+.src{font-style:normal;font-size:10px;border-radius:4px;padding:0 5px;white-space:nowrap}
+.src.video{background:#0b3a4f;color:#8fdcff}.src.est{background:#3a2a0c;color:#f5c542}
+#qModelDetail{display:flex;flex-direction:column;gap:8px}
+#qModelDetail summary{cursor:pointer;font-size:12px;color:var(--mut)}
+#fourDetail{display:flex;flex-direction:column;gap:8px}
+#fourDetail[hidden]{display:none}
+
+/* ---------- 任务页签 ---------- */
+#qTaskAdd{display:grid;grid-template-columns:1fr auto;gap:6px 10px;align-items:center;border-radius:14px;padding:11px 12px}
+.t-cur small{display:block;color:var(--mut);font-size:11px}.t-cur b{font-size:12.5px;line-height:1.45}
+#qTaskAdd .fine{grid-column:1 / 3;margin:0}
+#qTaskNew{border-radius:9px;padding:6px 12px;font-size:12.5px}
+#qTaskList{display:flex;flex-direction:column;gap:7px}
+.t-bar{display:flex;gap:6px;align-items:center}.t-bar button{font-size:12px;padding:3px 10px;border-radius:999px}
+.task{border-radius:12px;display:flex;flex-direction:column;gap:6px}
+.task.paused{opacity:.6}
+.t-head{display:flex;gap:6px;align-items:flex-start}.t-head b{font-size:12.5px;line-height:1.45}
+.t-head button,.t-now button{font-size:11px;padding:1px 8px;border-radius:999px;color:var(--mut)}
+.t-now{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.t-now small{color:var(--mut);font-size:11px;flex:1}
+.t-now button{color:var(--acc);border-color:#1d4d63}
+.t-hits{display:flex;gap:5px;flex-wrap:wrap}
+.t-hits button{font-size:11px;padding:1px 8px;border-radius:999px;color:#3dd6ff;border-color:#1f6f8a;background:#0f2530}
+.t-hits button.new{box-shadow:0 0 0 1px #ef4444}
+#qRunList{display:flex;flex-direction:column;gap:2px;padding:6px}
+.run-row{display:grid;grid-template-columns:auto 1fr;gap:1px 8px;text-align:left;border:0;background:none;border-radius:8px;padding:6px 6px;white-space:normal;font-size:12px;align-items:baseline}
+.run-row:hover{background:#232a38}
+.run-row span{color:var(--mut);font-variant-numeric:tabular-nums;font-size:11px}
+.run-row b{font-weight:600;line-height:1.4}
+.run-row i.m-side{grid-column:2;justify-self:start;padding:0 7px;font-size:11px}
+.run-row small{grid-column:2;color:var(--mut);font-size:11px;line-height:1.4}
+.run-clear{align-self:flex-end;margin-top:4px;font-size:11px;color:var(--mut);border-radius:999px;padding:1px 9px}
+.empty{color:var(--mut);font-size:12px;line-height:1.6}
+
+@media (max-width:1400px){#side{width:404px}}
+@media (max-width:1280px){#side{width:372px}#side.wide{width:min(620px,60vw)}.qw-term .lbl{display:none}.qw-head .qw-term{padding:3px 7px 3px 6px}}
+@media (max-width:1100px){#side{width:340px}.tiles{gap:6px}.tile b{font-size:15px}}
+.leg .kj{color:#f472b6}.leg .bl{color:#9fb3c8}.leg .bl b{color:#cfd8e3}

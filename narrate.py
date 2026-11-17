@@ -200,9 +200,10 @@ MIN_STEPS, MAX_STEPS = 2, 8
 MAX_DRAW = 8
 
 
-def chart_data(t, asof):
-    """Bars up to `asof`, for turning Claude's drawing instructions into real chart coordinates."""
-    full = panel.load(t)['B']
+def chart_data(t, asof, bars=None):
+    """Bars up to `asof`, for turning Claude's drawing instructions into real chart coordinates.
+    bars = the series the reading was made on (weekly bars for a weekly reading); default: the daily bars."""
+    full = bars if bars is not None else panel.load(t)['B']
     i = panel.index_at(full, asof)
     return dict(d=full['d'][:i + 1], idx={d: k for k, d in enumerate(full['d'][:i + 1])},
                 high=full['h'], low=full['l'], open=full['o'], close=full['c'])

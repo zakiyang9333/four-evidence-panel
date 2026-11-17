@@ -95,7 +95,7 @@ class EngineUntouched(unittest.TestCase):
             self.assertEqual(hashlib.md5(f.read()).hexdigest(), ENGINE_MD5)
 
     def test_estimates_are_in_one_place_and_named(self):
-        self.assertEqual(hs.VERSION, 'houshou-0.1')
+        self.assertEqual(hs.VERSION, 'houshou-0.2')
         self.assertEqual(hs.VIDEO, dict(far=0.15, abcd_tol=0.15, dry=0.5, stop=0.02))
         self.assertEqual(set(hs.EST), set(hs.EST_NOTE))             # 每个估算参数都有一句说明，界面上照着列
         src = open(os.path.join(ROOT, 'houshou.py'), encoding='utf-8').read()
@@ -132,7 +132,10 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(r['t1'], 137.0)                            # 目标 = 第三冲高点
         self.assertAlmostEqual(r['zone'][0], r['avwap'] * 0.99, delta=0.011); self.assertAlmostEqual(r['zone'][1], r['avwap'] * 1.01, delta=0.011)   # 建仓区 = 成本线 ±1%
         self.assertAlmostEqual(r['rr'], round((137.0 - r['avwap']) / (r['avwap'] - r['stop']), 2), delta=0.02)
-        self.assertIsNone(r['t2']); self.assertEqual(r['t2_note'], '视频未说明')
+        start_low = float(B['l'][19 + 15])                         # 横盘最后一根（起涨低点）的最低价 98.5
+        self.assertEqual(start_low, 98.5)
+        self.assertEqual(r['t2'], round(d_low + 2.0 * (137.0 - start_low), 2))      # 第二目标【估算】= D + 2 ×（第三冲高点 − 起涨低点）
+        self.assertIn('估算', r['t2_note']); self.assertEqual(r['side'], 'long')
         self.assertEqual(r['history']['n'], 1)
         self.assertEqual((r['history']['rows'][0]['date'], r['history']['rows'][0]['outcome']), (B['d'][-1], 'open'))
         self.assertIn('未做对照检验', r['history']['note'])
@@ -200,7 +203,7 @@ class CommandLine(unittest.TestCase):
             self.assertIn(f'【后手检查】{t}', a)
         self.assertIn('未回测', a)
         js = json.loads(self.run_cli('NVDA', '--json', '--asof', '2025-01-06'))
-        self.assertEqual((js['NVDA']['asof'], js['NVDA']['phase'], js['NVDA']['model']), ('2025-01-06', '回落中', 'houshou-0.1'))
+        self.assertEqual((js['NVDA']['asof'], js['NVDA']['phase'], js['NVDA']['model']), ('2025-01-06', '回落中', 'houshou-0.2'))
         self.assertEqual(json.loads(self.run_cli('QQQI', '--json'))['QQQI']['asof'], json.loads(self.run_cli('QQQ', '--json'))['QQQ']['asof'])   # 代理
 
 
@@ -246,7 +249,7 @@ class Api(unittest.TestCase):
 
     def test_shape_and_three_of_three(self):
         d = self.q()
-        self.assertEqual((d['model'], d['model_key'], d['asof']), ('houshou-0.1', 'houshou', self.B['d'][-1]))
+        self.assertEqual((d['model'], d['model_key'], d['asof']), ('houshou-0.2', 'houshou', self.B['d'][-1]))
         self.assertEqual([s['name'] for s in d['steps']], ['识别图表结构', '计算规则信号', '在图上划线', 'AI 深度解读'])
         self.assertRegex(d['steps'][0]['note'], r'^\d+ 条结构线$')
         self.assertEqual(d['steps'][2]['note'], f'共 {len(d["lines"])} 条，逐条画出')      # 条数是真的，不写死
@@ -254,12 +257,12 @@ class Api(unittest.TestCase):
         self.assertEqual((s['phase'], s['verdict'], s['verdict_text']), ('回落中', '下后手', '后手条件齐了（未回测）'))
         self.assertEqual([c['k'] for c in s['checks']], ['B1', 'B2', 'B3'])
         ids = [x['id'] for x in d['lines']]
-        for want in ('zone_hi', 'zone_lo', 'stop', 'fib_0.5', 'fib_0.618'):
+        for want in ('zone_hi', 'zone_lo', 'stop', 't1', 't2', 'fib_0.5', 'fib_0.618'):
             self.assertIn(want, ids)
         self.assertEqual(next(x for x in d['lines'] if x['id'] == 'stop')['label'], '止损（手动止损）')
         cells = {c['k']: c for c in d['card']['cells']}
         self.assertEqual(list(cells), ['price', 'zone', 'stop', 't1', 'rr', 't2'])
-        self.assertEqual(cells['t2']['v'], '视频未说明')
+        self.assertEqual(cells['t2']['v'], f"{s['t2']:,.2f}"); self.assertIn('估算', cells['t2']['sub'])     # 第二目标有数，而且写明是估算
         self.assertIn('手动止损', cells['stop']['sub'])
         self.assertIn('未回测', d['card']['footer'])
         self.assertFalse('买入' in json.dumps(d, ensure_ascii=False))
@@ -269,7 +272,8 @@ class Api(unittest.TestCase):
         self.assertTrue(all(x.get('n') for x in d['lines']), [x for x in d['lines'] if not x.get('n')])      # 每条线都有图例编号
         self.assertIn('尚未回测', d['banner'])
         self.assertEqual(len(d['score']['parts']), 5)
-        self.assertEqual(d['direction'], dict(long=True, short=False, short_note='没有做空规则'))
+        self.assertEqual(d['direction'], dict(long=True, short=True, short_note=''))      # 后手两侧都有规则
+        self.assertEqual((d['side'], d['side_ok'], d['tf'], d['horizon']['n'], d['signal']['state']), ('long', True, 'D', 20, 'ready'))
 
     def test_replay_recomputes_everything(self):
         top = self.q(asof=self.B['d'][self.info['top']])
@@ -328,7 +332,8 @@ class Api(unittest.TestCase):
             self.assertEqual(json.load(f), {})
 
     def test_core_position_never_gets_the_price_stop(self):
-        self.assertEqual(self.q()['position'], dict(text='没有持仓数据', held=False, core=False))
+        p0 = self.q()['position']
+        self.assertEqual((p0['text'], p0['held'], p0['core'], p0['mode'], p0['assumed']), ('没有持仓数据', False, False, 'auto', False))
         state = dict(asof_taipei='2026-11-16 11:10', positions=[dict(symbol='NVDA', type='stock', qty=10, avg_cost=100.0, side='safe', note='核心仓')])
         path = os.path.join(self.pf, 'portfolio_state.json')
         with open(path, 'w', encoding='utf-8') as f:
@@ -354,12 +359,14 @@ class Api(unittest.TestCase):
     def test_page_has_banner_and_no_order_buttons(self):
         import re
         page = http(self.s.port, '/')[1]
-        self.assertIn('四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据', page)
+        self.assertIn('四证：回测证据不足 ｜ 后手战法、破位反抽：尚未回测 ｜ 仅观察，不构成买卖依据', page)
         self.assertIsNone(re.search(r'<button[^>]*>[^<]*(买入|下单|卖出)', page))
         js = http(self.s.port, '/static/quant.js')[1]
         self.assertNotIn('买入', js); self.assertNotIn('下单', js)
-        self.assertIn('手动止损', js)
-        self.assertIn('没有做空规则', page)
+        self.assertIn('手动止损', json.dumps(self.q()['lines'], ensure_ascii=False))     # 止损线旁写着“手动止损”
+        for bid in ('qLong', 'qShort'):                                # 做多、做空两个按钮都能点
+            tag = re.search(r'<button id="%s"[^>]*>' % bid, page).group(0)
+            self.assertNotIn('disabled', tag)
 
 
 if __name__ == '__main__':

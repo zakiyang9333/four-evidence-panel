@@ -22,7 +22,7 @@
     try { localStorage.clear(); } catch (e) { /* 忽略 */ }
 
     // 固定提示：常驻，不能关
-    ok('banner_text', $('#banner').textContent.trim() === '四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据', $('#banner').textContent);
+    ok('banner_text', $('#banner').textContent.trim() === '四证：回测证据不足 ｜ 后手战法、破位反抽：尚未回测 ｜ 仅观察，不构成买卖依据', $('#banner').textContent);
     ok('banner_not_closable', !$('#banner button') && !$('#banner [role=button]') && getComputedStyle($('#banner')).display !== 'none');
 
     // 三只标的都能切换；2026-11-13 的状态
@@ -152,8 +152,10 @@
     ok('narr_skip_animation', document.querySelectorAll('#narr .n-step.show').length === 4 && !!$('#narr .n-final.show') && $('#aiSkip').hidden);
     $('#sideClose').click(); const closed = side.classList.contains('closed'); $('#aiBtn').click();
     ok('side_collapsible', closed && !side.classList.contains('closed'));
+    window.FEQuant.setTab('models'); await frame();          // 四证的历史信号、依据、回测现在在「模型」页签里
     const sigBtn = document.querySelector('#sigList button');
-    ok('history_signals_listed', !!sigBtn && $('#sigList').getBoundingClientRect().height > 20);
+    ok('history_signals_listed', !!sigBtn && $('#sigList').getBoundingClientRect().height > 20 && !$('#fourDetail').hidden && $('#qPaneAnalyze').hidden);
+    window.FEQuant.setTab('analyze'); await frame();
 
     // 周线：只看走势；四要素仍按日线判定，不画扇子、不打标记
     // 回放停在周中（2025-05-13 周二）时，周线停在上一个完整的周末，证据按那一天的日线收盘判定
@@ -268,16 +270,88 @@
       await until(() => QF.fresh() && QF.model() === 'houshou', 8000); await frame();
       const qd = QF.data();
       ok('quant_houshou_bar', !$('#qBar').hidden && /后手战法/.test($('#qBar').textContent) && $('#evidence').hidden && /后手·成本线回踩/.test($('#sigCard').textContent) &&
-        document.querySelectorAll('#tiles .tile').length === 6 && /视频未说明/.test($('#tiles').textContent) && /未回测/.test($('#sigFoot').textContent), $('#qBar').textContent);
+        document.querySelectorAll('#tiles .tile').length === 6 && /第二目标/.test($('#tiles').textContent) && /未回测/.test($('#sigFoot').textContent), $('#qBar').textContent);
       ok('quant_legend_numbered', !$('#qLegend').hidden && document.querySelectorAll('#qLegend li').length === qd.legend.length && qd.legend.length >= 3, qd.legend.length);
-      ok('quant_no_order_buttons', ![...document.querySelectorAll('button')].some(b => /买入|下单|卖出/.test(b.textContent)) && $('#qShort').disabled && /尚未回测/.test($('#banner').textContent));
+      ok('quant_no_order_buttons', ![...document.querySelectorAll('button')].some(b => /买入|下单|卖出/.test(b.textContent)) && !$('#qShort').disabled && !$('#qLong').disabled && /尚未回测/.test($('#banner').textContent));
       $('#qRun').click(); await until(() => !QF.state().running && QF.state().steps && QF.state().steps.every(s => s.state === 'done'), 20000); await frame();
       const stp = QF.state().steps || [];
       ok('quant_four_steps', stp.length === 4 && stp.every(s => s.state === 'done' && s.ms != null) && new RegExp('共 ' + qd.lines.length + ' 条').test(stp[2].note) && !!NA.current() && /模板|Claude/.test($('#narrSrc').textContent), stp);
-      ok('quant_lines_listed', document.querySelectorAll('#qLines .q-lines input').length === qd.lines.length && QF.state().linesOn === true);
-      ok('quant_params_marked_estimate', /估算/.test($('#qParams').textContent) && /样本数/.test($('#qHist').textContent));
+      // 显示设置：每条线一个开关；动画快慢、图例都能改
+      $('#qSetBtn').click(); await frame();
+      ok('quant_lines_listed', !$('#qSetPop').hidden && document.querySelectorAll('#qLines .q-lines input').length === qd.lines.length && QF.state().linesOn === true);
+      document.querySelector('#qSetPop [data-speed=fast]').click(); await frame();
+      const lg = document.querySelector('#qSetPop [data-set=legend]'); lg.checked = false; lg.dispatchEvent(new Event('change', { bubbles: true })); await frame();
+      const legendOff = $('#qLegend').hidden; lg.checked = true; lg.dispatchEvent(new Event('change', { bubbles: true })); await frame();
+      ok('quant_settings_work', QF.state().speed === 'fast' && legendOff && !$('#qLegend').hidden, [QF.state().speed, legendOff]);
+      document.querySelector('#qSetPop [data-speed=normal]').click(); document.body.click(); await frame();
+      // 窗口头部：放宽 / 恢复；量化终端按钮带着现在的周期和级别打开
+      $('#qExpand').click(); const wide = $('#side').classList.contains('wide'); $('#qExpand').click();
+      ok('quant_expand_toggles', wide && !$('#side').classList.contains('wide') && $('#qSetPop').hidden);
+      const open0 = window.open; let termUrl = ''; window.open = u => { termUrl = u; return null; }; $('#qTerm').click(); window.open = open0;
+      ok('quant_terminal_button', /^\/terminal\?hz=20&tf=D$/.test(termUrl), termUrl);
+      // 四个页签：每次只显示一页
+      const panes = () => [...document.querySelectorAll('#side [data-pane]')].filter(p => !p.hidden).map(p => p.dataset.pane).join();
+      const tabSeen = [];
+      for (const t of ['models', 'tasks', 'chat', 'analyze']) { document.querySelector('#qTabs [data-qtab=' + t + ']').click(); await frame(); tabSeen.push(panes() + (document.querySelector('#qTabs .on').dataset.qtab === t ? '' : '!')); }
+      ok('quant_tabs_switch', tabSeen.join('|') === 'models|tasks|chat|analyze' && $('#learn').hidden, tabSeen);
+      // 模型页签：三张模型卡，每张写明来历和参数；现在选的模型有历史触发表和参数表
+      QF.setTab('models'); await until(() => QF.state().lib && document.querySelectorAll('#qModelCards .mcard').length === QF.state().lib.models.length && $('#qParams') && $('#qHist') && document.querySelector('#qModelCards button.m-side'), 8000);
+      const nModels = QF.state().lib ? QF.state().lib.models.length : 0;
+      const sideBtns = QF.state().lib ? QF.state().lib.models.reduce((a, m) => a + (m.tfs.indexOf('D') >= 0 ? m.sides.length : 0), 0) : -1;
+      ok('quant_params_marked_estimate', /估算/.test($('#qParams').textContent) && /样本数/.test($('#qHist').textContent) && /录屏/.test($('#qModelCards').textContent) && $('#fourDetail').hidden);
+      ok('quant_model_cards', nModels >= 13 && document.querySelectorAll('#qModelCards .mcard').length === nModels && document.querySelector('#qModelCards .mcard.on').dataset.model === 'houshou' &&
+        /没有这一侧的规则/.test(document.querySelector('#qModelCards .mcard[data-model=four]').textContent) && document.querySelectorAll('#qModelCards button.m-side').length === sideBtns,
+        [nModels, document.querySelectorAll('#qModelCards button.m-side').length, sideBtns]);
+      ok('quant_model_dropdown_grouped', document.querySelectorAll('#qModel optgroup').length >= 4 && document.querySelectorAll('#qModel option').length === nModels &&
+        !!document.querySelector('#qModel option[value=yindie]'), document.querySelectorAll('#qModel option').length);
+      document.querySelector('#qModelCards .mcard[data-model=breakout] button.m-side[data-side=short]').click();     // 在模型页里点「破位反抽 · 做空」
+      await until(() => QF.fresh() && QF.model() === 'breakout' && QF.side() === 'short' && QF.tab() === 'analyze', 8000); await frame();
+      const bd = QF.data();
+      ok('quant_short_side_runs', bd.side === 'short' && bd.side_ok && $('#qShort').classList.contains('on') && !$('#qLong').classList.contains('on') && /做空/.test($('#sigCard .chip-dir').textContent) &&
+        /破位反抽/.test($('#sigCard').textContent) && document.querySelectorAll('#tiles .tile').length === 6 && $('#evidence').hidden && $('#qModel').value === 'breakout', $('#sigCard').textContent);
+      // 做多 / 做空两个按钮：点哪个算哪一侧，结果跟着换
+      $('#qLong').click(); await until(() => QF.fresh() && QF.side() === 'long', 8000); await frame();
+      const ld = QF.data();
+      ok('quant_long_button_switches_back', ld.side === 'long' && ld.variant !== bd.variant && $('#qLong').classList.contains('on') && !$('#qShort').classList.contains('on') && /做多/.test($('#sigCard .chip-dir').textContent) &&
+        /突破回踩/.test($('#sigCard').textContent + $('#qBar').textContent), [ld.variant, bd.variant, $('#sigCard').textContent.slice(0, 60)]);
+      // 周期：换成 60，表盘的回看、标签、历史往后看的根数都跟着变
+      const hz = $('#qHz'); hz.value = '60'; hz.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.data().horizon.n === 60, 8000); await frame();
+      ok('quant_horizon_changes_result', /MA180/.test($('#qScore').textContent) && /中线 · 60 日/.test($('#sigCard .chip-hz').textContent) && QF.data().history.hold === 60, $('#qScore').textContent.slice(0, 80));
+      hz.value = '20'; hz.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.data().horizon.n === 20, 8000);
+      // 持仓：假设持有多单，只多一句说明，清单和价位不变
+      const ps = $('#qPos'); ps.value = 'short'; ps.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.data().position.mode === 'short', 8000); await frame();
+      ok('quant_position_changes_words', !$('#qPosNote').hidden && /假设你有空单/.test($('#qPosNote').textContent) && JSON.stringify(QF.data().signal.checks) === JSON.stringify(ld.signal.checks), $('#qPosNote').textContent);
+      ps.value = 'auto'; ps.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.data().position.mode === 'auto', 8000); await frame();
+      ok('quant_position_back_to_account', $('#qPosNote').hidden);
+      // K 线级别：窗口头部的下拉和顶栏的「日线 / 周线」是同一个开关；破位反抽能在周 K 上跑
+      $('#qTfBtn').click(); await frame(); const tfPop = !$('#qTfPop').hidden;
+      document.querySelector('#qTfPop [data-qtf=W]').click(); await until(() => S.tf === 'W' && QF.fresh() && QF.data().tf === 'W', 10000); await frame();
+      ok('quant_weekly_pill', tfPop && $('#qTfPop').hidden && /周K/.test($('#qTfText').textContent) && QF.data().tf_ok && /20 周/.test($('#qHz').selectedOptions[0].textContent) &&
+        document.querySelector('#tfSeg [data-tf=W]').classList.contains('on') && /周K/.test($('#qWeekNote').textContent), $('#qTfText').textContent);
+      $('#qTfBtn').click(); await frame(); document.querySelector('#qTfPop [data-qtf=D]').click(); await until(() => S.tf === 'D' && QF.fresh() && QF.data().tf === 'D', 10000); await frame();
+      // 四证没有做空一侧：按了做空，如实说用不上，并给出“换用”按钮；点一下就换过去
       sel.value = 'four'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.model() === 'four', 8000); await frame();
-      ok('quant_back_to_four', $('#qBar').hidden && !$('#evidence').hidden && lit() === S.state.lit && /四要素规则引擎/.test($('#sigCard').textContent));
+      $('#qShort').click(); await until(() => QF.fresh() && QF.side() === 'short', 8000); await frame();
+      const na = QF.data(), useBtn = document.querySelector('#sigCard .sig-use [data-use=houshou]');
+      ok('quant_four_short_says_so', na.side_ok === false && na.signal.unsupported === 'side' && /只定义了做多一侧/.test($('#sigCard').textContent) && !!useBtn && $('#evidence').hidden &&
+        [...document.querySelectorAll('#tiles .tile b')].slice(1).every(b => b.textContent === '—'), $('#sigCard').textContent);
+      useBtn.click(); await until(() => QF.fresh() && QF.model() === 'houshou' && QF.side() === 'short', 8000); await frame();
+      ok('quant_suggested_model_takes_over', QF.data().side_ok && /后手战法 · 做空/.test($('#qBar').textContent) && /镜像规则/.test($('#sigCard').textContent), $('#qBar').textContent);
+      // 任务页签：把现在的组合加入盯盘，暂停、删除；刚才那次分析留了一行记录，点它能回去
+      QF.setTab('tasks'); await until(() => $('#qTaskNew') && !$('#qTaskNew').disabled && document.querySelector('#qRunList .run-row'), 8000);
+      const runs0 = document.querySelectorAll('#qRunList .run-row').length;
+      $('#qTaskNew').click(); await until(() => document.querySelector('#qTaskList .task'), 8000);
+      const tk = QF.state().tasks.tasks[0];
+      ok('quant_task_added', tk.ticker === 'NVDA' && tk.model === 'houshou' && tk.side === 'short' && !!tk.last && $('#qTaskNew').disabled && /后手·成本线回踩/.test($('#qTaskList').textContent), tk);
+      document.querySelector('#qTaskList [data-task=pause]').click(); await until(() => QF.state().tasks.tasks[0].enabled === false, 6000);
+      const paused = !!document.querySelector('#qTaskList .task.paused');
+      document.querySelector('#qTaskList [data-task=delete]').click(); await until(() => QF.state().tasks.tasks.length === 0, 6000);
+      ok('quant_task_pause_and_delete', paused && !document.querySelector('#qTaskList .task') && !$('#qTaskNew').disabled);
+      document.querySelector('#qRunList .run-row').click(); await until(() => QF.fresh() && QF.model() === 'houshou' && QF.side() === 'long' && QF.tab() === 'analyze', 8000); await frame();
+      ok('quant_run_log_restores', runs0 >= 1 && QF.side() === 'long' && $('#qLong').classList.contains('on') && S.ticker === 'NVDA', runs0);
+      sel.value = 'four'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.model() === 'four' && QF.side() === 'long', 8000); await frame();
+      ok('quant_back_to_four', $('#qBar').hidden && !$('#evidence').hidden && lit() === S.state.lit && /四要素规则引擎/.test($('#sigCard').textContent) && document.querySelectorAll('#tiles .tile').length === 6 &&
+        /第二目标/.test($('#tiles').textContent) && /做多/.test($('#sigCard .chip-dir').textContent));
       await pick('SPCX');
     }
     // 「时效与备注」：侧栏的时效卡片；手写一条备注，图底部出现标记；删掉后消失

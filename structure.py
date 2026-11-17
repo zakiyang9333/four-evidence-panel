@@ -8,10 +8,11 @@ import houshou as hs
 FIB = (0.236, 0.382, 0.5, 0.618, 0.786)
 
 
-def support_resistance(P, i):
-    """Cluster confirmed swing points of the last sr_win bars within sr_tol; count touches (≥3 bars apart).
-    Returns (resistance, support): the most-touched level above and below the close, or None."""
-    tol, win = hs.EST['sr_tol'], hs.EST['sr_win']
+def support_resistance(P, i, win=None):
+    """Cluster confirmed swing points of the last `win` bars (default sr_win) within sr_tol; count touches (≥3 bars apart).
+    Returns (resistance, support): the most-touched level above and below the close, or None.
+    P must be the long-side pass (real prices): structure describes the chart, it has no direction."""
+    tol, win = hs.EST['sr_tol'], win or hs.EST['sr_win']
     w0 = max(0, i - win + 1)
     conf, _ = hs.swings(P, i)
     prices = sorted(x['price'] for x in conf if x['i'] >= w0)
@@ -36,12 +37,27 @@ def support_resistance(P, i):
     return pick([x for x in levels if x[0] > close]), pick([x for x in levels if x[0] < close])
 
 
-def lines(P, i, hsr, model='houshou', four=None, core=False):
-    """hsr = houshou.compute(...) at bar i (its start low and top give the main advance for the Fibonacci levels).
+def four_lines(P, four):
+    """The three lines the four-evidence engine itself gives (drawn by the page's 自动画 layer)."""
+    d, out = P['d'], []
+    dr, lv = four['draw'], four['levels']
+    if dr.get('fan') and lv.get('fan05') is not None and four['index'] > dr['fan']['lo']:
+        out.append(dict(id='four_fan', kind='auto', group='model', label='0.5 扇线', style='fan',
+                        p1=dict(date=d[dr['fan']['hi']], price=dr['fan']['H']), p2=dict(date=four['asof'], price=lv['fan05'])))
+    if dr.get('avwap'):
+        out.append(dict(id='four_avwap', kind='auto', group='model', label='锚定 VWAP', style='vwap', price=lv.get('avwap')))
+    if lv.get('stop') is not None:
+        out.append(dict(id='four_stop', kind='auto', group='model', label='止损线', style='stop', price=hs.r2(lv['stop'])))
+    return out
+
+
+def lines(P, i, hsr, model='houshou', four=None, core=False, win=None):
+    """hsr = houshou.compute(...) at bar i, long side (its start low and top give the main advance for the Fibonacci levels).
+    model=None gives the structure lines only (quant.py adds the plan lines itself, the same way for every model).
     four = panel.state_at(...) when the model is the four-evidence one. core = this ticker is held as a core position."""
     d = P['d']
     out = []
-    res, sup = support_resistance(P, i)
+    res, sup = support_resistance(P, i, win)
     if res:
         out.append(dict(id='res', kind='level', group='structure', label=f'压力·{res[1]} 次', price=hs.r2(res[0]), style='res'))
     if sup:
@@ -67,13 +83,6 @@ def lines(P, i, hsr, model='houshou', four=None, core=False):
             out.append(dict(id='zone_lo', kind='level', group='model', label='建仓下沿', price=hsr['zone'][0], style='zone'))
             if not core:        # 核心仓没有价格止损：D 点下 2% 这条线不画
                 out.append(dict(id='stop', kind='level', group='model', label='止损（手动止损）', price=hsr['stop'], style='stop'))
-    elif four:
-        dr, lv = four['draw'], four['levels']
-        if dr.get('fan') and lv.get('fan05') is not None and four['index'] > dr['fan']['lo']:
-            out.append(dict(id='four_fan', kind='auto', group='model', label='0.5 扇线', style='fan',
-                            p1=dict(date=d[dr['fan']['hi']], price=dr['fan']['H']), p2=dict(date=four['asof'], price=lv['fan05'])))
-        if dr.get('avwap'):
-            out.append(dict(id='four_avwap', kind='auto', group='model', label='锚定 VWAP', style='vwap', price=lv.get('avwap')))
-        if lv.get('stop') is not None:
-            out.append(dict(id='four_stop', kind='auto', group='model', label='止损线', style='stop', price=hs.r2(lv['stop'])))
+    elif four and model == 'four':
+        out += four_lines(P, four)
     return out, n_struct

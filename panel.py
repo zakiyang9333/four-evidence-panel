@@ -225,8 +225,13 @@ def bars_payload(t, tf='D'):
         return out
 
     r = lambda a, nd=6: [fnum(x, nd) for x in a]
+    import indicators as ind            # 副图用的指标：只是显示，四要素的判定不看它们
+    kk, kd, kj = ind.kdj(B['h'], B['l'], B['c'])
+    bm, bu, bl = ind.boll(B['c'])
     return dict(ticker=t, tf=tf, d=B['d'], o=r(B['o']), h=r(B['h']), l=r(B['l']), c=r(B['c']), v=[int(x) for x in v],
                 vma5=sma(5), vma10=sma(10), dif=r(dif), dea=r(dea), hist=r(hist), lowvol=lowvol,
+                rsi=r(ind.rsi(B['c']), 2), kdj_k=r(kk, 2), kdj_d=r(kd, 2), kdj_j=r(kj, 2), boll_mid=r(bm, 4), boll_up=r(bu, 4), boll_low=r(bl, 4),
+                atr=r(ind.atr(B['h'], B['l'], B['c']), 4),
                 src={str(i): s for i, s in enumerate(B['src']) if s != 'project'},
                 crosscheck=crosscheck(t), freshness=freshness(t),
                 params=dict(n_vol=P['n_vol'], dd=P['dd'], stop=P['stop'], fan=P['fan'],

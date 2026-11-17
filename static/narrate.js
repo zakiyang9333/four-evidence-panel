@@ -9,7 +9,10 @@ window.FENarrate = (() => {
   const STEP_MS = 1000;
   let ctx = null, cur = null, timer = 0, shown = 0, busy = false, seq = 0, armed = 0, tried = '';
 
-  const MODEL = { four: '四证·抄底', houshou: '后手·成本线回踩' };
+  const MODEL = { four: '四证·抄底', houshou: '后手·成本线回踩', breakout: '破位反抽' };
+  const HINT = { four: '按视频的四问走一遍：量 → MACD → 扇子 → 成本线。先出模板版，不花钱。', houshou: '按后手战法的三问走一遍，再看一眼表盘。先出模板版，不花钱。',
+    breakout: '按破位反抽的三问走一遍：破位了吗、反抽到位了吗、缩量受阻了吗。先出模板版，不花钱。' };
+  const combo = r => r.profile_label || (MODEL[r.rule_model] || '另一个模型') + (r.profile && r.profile.side === 'short' ? ' · 做空' : '');
   const kilo = n => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
@@ -26,7 +29,7 @@ window.FENarrate = (() => {
         const b = el('button', 'nh-row');
         b.appendChild(el('b', '', d.date)); b.appendChild(el('i', '', d.model_name)); b.appendChild(el('span', '', d.hook || ''));
         b.title = '分析于 ' + (d.created_at || '') + (d.versions > 1 ? '，共 ' + d.versions + ' 版' : '') + '。点一下回到这一天看';
-        b.onclick = () => ctx.gotoDay(d.date, d.model);
+        b.onclick = () => ctx.gotoDay(d.date, d);
         list.appendChild(b);
       });
     } catch (e) { list.textContent = '记录没取到：' + e.message; }
@@ -62,9 +65,9 @@ window.FENarrate = (() => {
         : cur.from_other ? '用现在选的模型再分析一次（会计费）' : upToDate() ? '重新分析' : '按新数据重新分析（会计费）';
       b.title = p.enabled ? '把引擎事实交给 ' + p.model + ' 分析；数字会逐个核对，结论仍以引擎为准' : p.reason;
     }
-    $('#aiHint').textContent = !cur ? (ctx && ctx.model() === 'houshou' ? '按后手战法的三问走一遍，再看一眼表盘。先出模板版，不花钱。' : '按视频的四问走一遍：量 → MACD → 扇子 → 成本线。先出模板版，不花钱。')
+    $('#aiHint').textContent = !cur ? ((ctx && HINT[ctx.model()]) || HINT.four) + (ctx && ctx.side() === 'short' ? '现在看的是做空一侧。' : '')
       : p && !p.enabled ? p.reason
-      : cur.from_other ? '这一份是在「' + (MODEL[cur.rule_model] || '另一个') + '」模型下分析的。现在选的模型今天还没分析过，先把它留在这里。'
+      : cur.from_other ? '这一份是在「' + combo(cur) + '」下分析的。现在选的组合今天还没分析过，先把它留在这里。'
       : cur.source === 'claude' ? (upToDate() ? '这一版已存在本机：重播、切换标的、切换模型、重开面板都不再计费。' : '这一版保存之后，数据或仓位变过。')
       : (p && p.positions ? '润色时会附上这只标的相关的 ' + p.positions + ' 个仓位，不发整份账户。' : '');
   }
@@ -79,8 +82,8 @@ window.FENarrate = (() => {
     tried = key;
     const my = seq;
     try {
-      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + '&model=' + ctx.model());
-      const saved = r.polished || r.other;        // 这个模型今天没分析过，就先显示另一个模型下分析的那一份：切换模型不清空
+      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + ctx.query());
+      const saved = r.polished || r.other;        // 这个组合今天没分析过，就先显示别的组合下分析的那一份：切换模型或方向不清空
       if (my !== seq || cur || busy || !saved) return;
       show(Object.assign({}, saved, { polish: r.polish }), false);
     } catch (e) { /* 取不到就算了，点“AI 分析”还能再取 */ }
@@ -90,7 +93,7 @@ window.FENarrate = (() => {
     if (busy || !ctx.ready()) return;
     const my = ++seq; busy = true; sync();
     try {
-      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + '&model=' + ctx.model());
+      const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + ctx.query());
       if (my !== seq) return;
       const use = r.polished ? Object.assign({}, r.polished, { polish: r.polish }) : r;
       busy = false; show(use, true);
@@ -107,7 +110,7 @@ window.FENarrate = (() => {
     const my = ++seq, keep = cur.polish; busy = true; sync();
     const t0 = Date.now(), tick = setInterval(() => { $('#narrMeta').textContent = 'Claude 正在写… ' + Math.round((Date.now() - t0) / 1000) + ' 秒'; }, 500);
     try {
-      const r = await ctx.api('/api/ai/analyze', { ticker: ctx.ticker(), asof: ctx.asof(), test_fake_number: !!fake, force, model: ctx.model() });
+      const r = await ctx.api('/api/ai/analyze', Object.assign({ ticker: ctx.ticker(), asof: ctx.asof(), test_fake_number: !!fake, force }, ctx.profile()));
       clearInterval(tick);
       if (my !== seq) return;
       busy = false;
@@ -163,7 +166,7 @@ window.FENarrate = (() => {
         (res.tokens_in != null && res.tokens_out != null ? ' · 用了 ' + kilo(res.tokens_in) + ' 入 + ' + kilo(res.tokens_out) + ' 出 token' : '') +
         (res.cached && res.same_input === false ? ' · 之后数据或仓位变过，可能过时' : '')
       : '模板版 · 不调用 API';
-    $('#narrMeta').textContent = src + ' · ' + res.ticker + ' ' + res.asof + (res.source === 'claude' && res.rule_model ? ' · ' + (MODEL[res.rule_model] || '') : '');
+    $('#narrMeta').textContent = src + ' · ' + res.ticker + ' ' + res.asof + (res.source === 'claude' && res.rule_model ? ' · ' + (MODEL[res.rule_model] || '') + (res.profile && res.profile.side === 'short' ? ' · 做空' : '') : '');
     if (res.source === 'claude' && !res.cached) loadHistory(true);          // 新分析了一份：分析记录跟着更新
     const tag = $('#narrSrc'); tag.hidden = false; tag.textContent = res.source === 'claude' ? 'Claude' : '模板'; tag.className = 'qtag' + (res.source === 'claude' ? ' pos' : '');
     const nt = $('#narrNotice'); nt.hidden = !res.notice; nt.textContent = res.notice || '';

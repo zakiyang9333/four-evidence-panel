@@ -16,7 +16,13 @@ GET  /api/notes?ticker=&asof=           K 线上的备注（事件日、新闻�
 POST /api/notes/manual | /delete | /search   手写一条、删一条、让 Claude 联网查某几天（会计费，查过的不再查）
 POST /api/notes/translate   把存档里的英文新闻标题翻成中文并存下来（每条只翻一次）
 GET  /api/learn?ticker=&model=&asof=    「一键解释」学习面板：大白话讲这一天屏幕上的每样东西（程序拼的，不调用 AI）
-GET  /api/quant?ticker=&model=houshou|four&asof=   「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发
+GET  /api/quant?ticker=&model=four|houshou|breakout&side=long|short&hz=20|60|120&tf=D|W&pos=auto|flat|long|short&asof=
+                               「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发（五个输入见 quant.py 开头）
+GET  /api/quant/models         模型库：每个模型的来历、清单、参数（哪些是录屏里说的，哪些是估算）
+GET  /api/quant/scan?hz=&tf=[&ticker=&model=&side=]   量化终端的表：每只标的 × 每个模型 × 多空现在的状态
+GET  /api/quant/tasks          盯盘任务（顺带把新到的 K 线检查一遍）；POST 新建 / 暂停 / 删除 / 标为已读
+GET  /api/quant/runs           分析记录；POST /api/quant/run 记一笔
+GET  /terminal                 量化终端页面
 POST /api/quant/narrate     这份结果的解说：模板（免费）或 Claude（body.claude 为真）
 POST /api/quant/anchor      后手模型的手动成本锚点（存 data/houshou_anchor.json）
 GET  /api/portfolio         「持仓」页的全部内容（只读 portfolio/ 里的文件）
@@ -47,6 +53,7 @@ import notes
 import panel
 import portfolio
 import quant
+import tasks
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(ROOT, 'static')
@@ -102,6 +109,10 @@ def run_refresh():
                     last=r.get('last'), last_src=r.get('last_src'), sources=r.get('sources', {})) for t, r in rep.items()})
         out['has_error'] = any(r['errors'] for r in out['tickers'].values())
         _last_refresh = out
+        try:        # 有新 K 线了：把盯盘任务检查一遍（只在本机记一笔，不发任何东西）
+            out['tasks_unseen'] = tasks.listing()['unseen']
+        except Exception:       # noqa: BLE001
+            pass
         return 200, out
     finally:
         _refresh_lock.release()
@@ -113,34 +124,53 @@ def meta():
                 ai=dict(enabled=ok, reason=why, model=CFG['ai_model'], translate_auto=bool(CFG.get('ai_translate_auto', True))),
                 backtest=panel.backtest_summary(), last_refresh=_last_refresh, last_refresh_file=panel.last_refresh(),
                 portfolio_poll_s=max(5, min(60, int(CFG.get('portfolio_poll_s', 15)))),
+                quant_models=[dict(key=m['key'], name=m['name'], sides=list(m['sides']), tfs=list(m['tfs']), group=m.get('group', ''), kind=m.get('kind', 'trade'), default_side=m.get('default_side', 'long'), default_hz=m.get('default_hz', 20)) for m in quant.MODELS],
                 engine=dict(version='v1.0', params=panel.P, fixed={k: panel.F[k] for k in ('hi_win', 'div_gap', 'tgt_win', 'max_hold')}))
 
 
-def ai_model(m):
-    return 'houshou' if m == 'houshou' else 'four'
+def ai_model(m, default='four'):
+    """A model key the registry knows; anything else falls back (old links and typos don't break the page)."""
+    return m if m in quant.MODEL else default
 
 
-def ai_inputs(t, asof, model='four'):
+def prof(src, default_model='four'):
+    """The five inputs of one analysis (model, side, horizon, bar size, position mode) from a query string or a JSON body."""
+    return quant.norm(ai_model(src.get('model'), default_model), src.get('side'), src.get('hz', src.get('horizon')), src.get('tf'), src.get('pos', src.get('posmode')))
+
+
+def ai_inputs(t, asof, model='four', side='long', horizon=20, tf='D', posmode='auto'):
     """Everything one AI reading is built from, plus a fingerprint of it. Returns a dict."""
-    state = panel.state_at(t, asof or None)
-    B = panel.load(t)['B']
-    i = state['index']
-    a = max(0, i - 59)
+    a = quant.norm(ai_model(model), side, horizon, tf, posmode)
+    model, side, horizon, tf, posmode = a['model'], a['side'], a['horizon'], a['tf'], a['posmode']
+    q = quant.result(t, model, asof or None, side, horizon, tf, posmode)
+    state = panel.state_at(t, q['asof'])        # 四证引擎在这一天的状态：周 K 时就是那根周 K 最后一个交易日的状态
+    B = quant.bars(t, tf)
+    i = q['index']
+    k = max(0, i - 59)
     bars = [[B['d'][j], panel.fnum(B['o'][j], 4), panel.fnum(B['h'][j], 4), panel.fnum(B['l'][j], 4),
-             panel.fnum(B['c'][j], 4), int(B['v'][j])] for j in range(a, i + 1)]
+             panel.fnum(B['c'][j], 4), int(B['v'][j])] for j in range(k, i + 1)]
     # 仓位是现在的仓位，只在看最新一根时附上；回放历史某天时不附。只发这只标的相关的，不发整份账户。
-    pos = portfolio.relevant_positions(t) if state['is_latest'] else None
+    # 「持仓」选的是假设（未持仓 / 多单 / 空单）时，账户里的真实仓位不发，只把这个假设告诉它。
+    pos = portfolio.relevant_positions(t) if q['is_latest'] and posmode == 'auto' else None
     bt = panel.backtest_summary()
     facts = narrate.build_facts(t, state['asof'])
-    q = quant.result(t, model, state['asof'])
     qf = quant.facts_for_ai(q)
-    # 四证：指纹和以前一样（表盘和结构线都是从同一批 K 线算出来的，盘面没变它们就没变），保存过的解读继续有效。
-    # 后手：再加上清单结果，手动改了成本锚点就算变了。
-    extra = dict(model='houshou', signal=qf['rule_signal']) if model == 'houshou' else None
-    tmpl = quant.template(q) if model == 'houshou' else narrate.template(facts)
+    # 四证·做多·20 日·日 K：指纹和以前一样（表盘和结构线都是从同一批 K 线算出来的，盘面没变它们就没变），保存过的解读继续有效。
+    # 后手·做多·20 日·日 K：和以前一样只加清单结果，手动改了成本锚点就算变了。
+    # 其余组合：再加上方向、周期、级别、假设的持仓和计划价位，各记各的。
+    var = quant.variant(model, side, horizon, tf)
+    four = model == 'four' and not q['signal'].get('unsupported')
+    if var == '' and posmode == 'auto':
+        extra = None
+    elif var == 'houshou' and posmode == 'auto':
+        extra = dict(model='houshou', signal=qf['rule_signal'])
+    else:
+        extra = dict(model=model, side=side, horizon=horizon, tf=tf, pos=posmode, signal=qf['rule_signal'], plan=qf['plan'])
+    tmpl = narrate.template(facts) if four else quant.template(q)
     ctx = notes.for_ai(t, state['asof'])        # K 线上的备注。不进指纹：盘面没变，保存的解读仍然有效，只是会提示“之后新增了几条备注”
-    return dict(facts=facts, bars=bars, bt=bt, pos=pos, q=q, qf=qf, tmpl=tmpl, model=model, notes=ctx if ctx['notes'] or ctx['next_earnings'] else None,
-                positive=(q['signal']['verdict'] == '下后手') if model == 'houshou' else facts['all4'],
+    return dict(facts=facts, bars=bars, bt=bt, pos=pos, q=q, qf=qf, tmpl=tmpl, model=model, variant=var, four=four, prof=a,
+                notes=ctx if ctx['notes'] or ctx['next_earnings'] else None,
+                positive=facts['all4'] if four else q['signal']['state'] == 'ready',
                 allowed=narrate.allowed_numbers(facts, bars, bt, pos, qf, tmpl, ctx),
                 fp=ai_explain.fingerprint(facts, bars, bt, CFG, pos, extra))
 
@@ -151,19 +181,24 @@ def narration_result(t, facts, bt, narr, source, **extra):
                 score=facts['score'], armed=facts['armed'], **extra)
 
 
-def ai_narrate(t, asof, model='four'):
-    """Free, instant template narration, plus the last saved Claude version for this day and model if there is one."""
-    x = ai_inputs(t, asof, ai_model(model))
+def ai_narrate(t, asof, model='four', side='long', horizon=20, tf='D', posmode='auto'):
+    """Free, instant template narration, plus the last saved Claude version for this day and this combination if there is one."""
+    x = ai_inputs(t, asof, model, side, horizon, tf, posmode)
     facts, bt, pos = x['facts'], x['bt'], x['pos']
-    res = narration_result(t, facts, bt, x['tmpl'], 'template', rule_model=x['model'])
-    rows = ai_cache_read(t, facts['asof'], x['model'])
+    res = narration_result(t, facts, bt, x['tmpl'], 'template', rule_model=x['model'], variant=x['variant'], profile=x['prof'])
+    rows = ai_cache_read(t, x['q']['asof'], x['variant'])
     if rows:
         res['polished'] = saved_view(rows[0], x)
-    else:       # 这个模型今天没分析过，但另一个模型分析过：把那一份也给出去，切换模型时不至于一片空白
-        other = 'four' if x['model'] == 'houshou' else 'houshou'
-        orows = ai_cache_read(t, facts['asof'], other)
-        if orows:
-            res['other'] = dict(saved_view(orows[0], ai_inputs(t, asof, other)), from_other=True, rule_model=other)
+    else:       # 这个组合今天没分析过，但别的组合分析过：把最近的那一份也给出去，切换模型或方向时不至于一片空白
+        best = None
+        for var in ai_variants(t, x['q']['asof']):
+            orows = ai_cache_read(t, x['q']['asof'], var)
+            if orows and (best is None or (orows[0].get('created_at') or '') > (best[1][0].get('created_at') or '')):
+                best = (var, orows)
+        if best:
+            o = variant_profile(best[0])
+            res['other'] = dict(saved_view(best[1][0], ai_inputs(t, asof, o['model'], o['side'], o['horizon'], o['tf'])), from_other=True, rule_model=o['model'],
+                                variant=best[0], profile=o, profile_label=profile_label(o))
     ok, why = ai_explain.status(CFG)
     res['polish'] = dict(enabled=ok, reason=why, model=CFG['ai_model'], positions=len(pos['positions']) if pos else 0)
     return res
@@ -186,85 +221,168 @@ AI_CACHE = os.environ.get('FE_CACHE_DIR') or os.path.join(ROOT, 'cache', 'ai')
 AI_KEEP = 5
 
 
-def _ai_cache_path(t, asof, model='four'):
-    if t not in panel.TICKERS or not (len(asof) == 10 and asof[4] == '-' and asof[7] == '-' and asof.replace('-', '').isdigit()):
+VARIANT_RE = re.compile(r'(?:(houshou|breakout))?(?:_?(short))?(?:_?h(60|120))?(?:_?(W))?')
+
+
+def variant_profile(var):
+    """'' / 'houshou' / 'breakout_short_h60_W' ... back into model, side, horizon and bar size. None if it is not one of ours."""
+    m = VARIANT_RE.fullmatch(var or '')
+    if not m:
+        return None
+    o = dict(model=m.group(1) or 'four', side='short' if m.group(2) else 'long', horizon=int(m.group(3) or 20), tf='W' if m.group(4) else 'D')
+    return o if quant.variant(o['model'], o['side'], o['horizon'], o['tf']) == (var or '') else None
+
+
+def profile_label(o):
+    return ' · '.join([quant.MODEL[o['model']]['name'], quant.SIDE_NAME[o['side']], quant.horizon_label(o['horizon'], o['tf'])] + (['周K'] if o['tf'] == 'W' else []))
+
+
+def _ai_cache_path(t, asof, variant=''):
+    """One file per day and combination. variant: '' (四证·做多·20 日·日 K), 'houshou', 'breakout_short', ... (quant.variant);
+    the old argument values 'four' and 'houshou' still mean what they meant."""
+    variant = '' if variant in (None, 'four') else variant
+    if t not in panel.TICKERS or not (len(asof) == 10 and asof[4] == '-' and asof[7] == '-' and asof.replace('-', '').isdigit()) or variant_profile(variant) is None:
         raise KeyError(t)
-    return os.path.join(AI_CACHE, f'{t}_{asof}' + ('_houshou' if model == 'houshou' else '') + '.json')      # 每个模型各记各的
+    return os.path.join(AI_CACHE, f'{t}_{asof}' + ('_' + variant if variant else '') + '.json')      # 每个组合各记各的
 
 
-def ai_cache_read(t, asof, model='four'):
+def ai_cache_read(t, asof, variant=''):
     try:
-        with open(_ai_cache_path(t, asof, model), encoding='utf-8') as f:
+        with open(_ai_cache_path(t, asof, variant), encoding='utf-8') as f:
             return json.load(f)
     except (OSError, ValueError):
         return []
 
 
-def ai_cache_add(t, asof, entry, model='four'):
+def ai_cache_add(t, asof, entry, variant=''):
     os.makedirs(AI_CACHE, exist_ok=True)
-    rows = ([entry] + ai_cache_read(t, asof, model))[:AI_KEEP]
-    tmp = _ai_cache_path(t, asof, model) + '.tmp'
+    rows = ([entry] + ai_cache_read(t, asof, variant))[:AI_KEEP]
+    tmp = _ai_cache_path(t, asof, variant) + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(rows, f, ensure_ascii=False, indent=1)
-    os.replace(tmp, _ai_cache_path(t, asof, model))
+    os.replace(tmp, _ai_cache_path(t, asof, variant))
 
 
-MODEL_NAMES = dict(four='四证·抄底', houshou='后手·成本线回踩')
-
-
-def ai_history(t, limit=120):
-    """按天保存的 AI 解读：这只标的哪些天分析过、用的哪个模型、那天的一句话。只读本机 cache/ai/。"""
-    if t not in panel.TICKERS:
-        raise KeyError(t)
-    out = []
+def ai_variants(t, asof=None):
+    """Saved readings of one ticker: [(date, variant)] newest first, or just the variants of one day."""
     try:
         names = os.listdir(AI_CACHE)
     except OSError:
         names = []
+    out = []
     for n in names:
-        m = re.fullmatch(re.escape(t) + r'_(\d{4}-\d{2}-\d{2})(_houshou)?\.json', n)
-        if not m:
-            continue
-        model = 'houshou' if m.group(2) else 'four'
-        rows = ai_cache_read(t, m.group(1), model)
+        m = re.fullmatch(re.escape(t) + r'_(\d{4}-\d{2}-\d{2})(?:_([A-Za-z0-9_]+))?\.json', n)
+        if m and variant_profile(m.group(2) or '') is not None and (asof is None or m.group(1) == asof):
+            out.append((m.group(1), m.group(2) or ''))
+    return [v for _, v in out] if asof is not None else out
+
+
+MODEL_NAMES = dict(four='四证·抄底', houshou='后手·成本线回踩', breakout='破位反抽')
+
+
+def ai_history(t, limit=120):
+    """按天保存的 AI 解读：这只标的哪些天分析过、用的哪个模型和方向、那天的一句话。只读本机 cache/ai/。"""
+    if t not in panel.TICKERS:
+        raise KeyError(t)
+    out = []
+    for date, var in ai_variants(t):
+        rows = ai_cache_read(t, date, var)
         if rows:
-            r = rows[0]
-            out.append(dict(date=m.group(1), model=model, model_name=MODEL_NAMES[model], created_at=r.get('created_at'), versions=len(rows),
+            r, o = rows[0], variant_profile(var)
+            out.append(dict(date=date, model=o['model'], side=o['side'], horizon=o['horizon'], tf=o['tf'], variant=var,
+                            model_name=MODEL_NAMES[o['model']] + ('' if o['side'] == 'long' else ' · 做空') + ('' if o['horizon'] == 20 else f' · {o["horizon"]} 根') + ('' if o['tf'] == 'D' else ' · 周K'),
+                            created_at=r.get('created_at'), versions=len(rows),
                             hook=(r.get('narration') or {}).get('hook'), final=(r.get('narration') or {}).get('final')))
     out.sort(key=lambda r: (r['date'], r['created_at'] or ''), reverse=True)
     return dict(ok=True, ticker=t, days=out[:limit])
 
 
-def chat_context(t, asof, model):
-    """The chart data a chat message carries, and a key that changes when any of it does."""
-    x = ai_inputs(t, asof, ai_model(model))
+def chat_context(t, asof, src):
+    """The chart data a chat message carries, and a key that changes when any of it does. src = the page's five inputs (or just a model key)."""
+    a = prof(src if isinstance(src, dict) else dict(model=src))
+    x = ai_inputs(t, asof, a['model'], a['side'], a['horizon'], a['tf'], a['posmode'])
     f = x['facts']
-    rows = ai_cache_read(t, f['asof'], x['model']) or ai_cache_read(t, f['asof'], 'four' if x['model'] == 'houshou' else 'houshou')
+    rows = ai_cache_read(t, x['q']['asof'], x['variant'])
+    for var in ([] if rows else ai_variants(t, x['q']['asof'])):
+        rows = rows or ai_cache_read(t, x['q']['asof'], var)
     reading = None
     if rows:
         n = rows[0].get('narration') or {}
         reading = dict(created_at=rows[0].get('created_at'), headline=n.get('hook'), story=n.get('story'), conclusion=n.get('final'),
                        steps=[dict(title=s.get('q'), says=s.get('say'), tag=s.get('sticker')) for s in n.get('steps') or []], watch=n.get('watch'))
-    body = dict(ticker=t, asof=f['asof'], is_latest=bool(x['q']['is_latest']), selected_model=x['q']['model_name'], engine=f,
+    body = dict(ticker=t, asof=x['q']['asof'], is_latest=bool(x['q']['is_latest']), selected_model=x['q']['model_name'], engine=f,
                 bars=dict(columns=['date', 'open', 'high', 'low', 'close', 'volume'], rows=x['bars']), backtest=x['bt'], quant=x['qf'],
                 notes=x['notes'], saved_ai_reading=reading)
     if x['pos']:
         body.update(x['pos'])           # 只有这只标的相关的仓位，和 AI 解读发的是同一份
     text = json.dumps(body, ensure_ascii=False, separators=(',', ':'), default=str)
     key = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
-    return text, key, f"{t} {f['asof']} · {x['q']['model_name']}"
+    q = x['q']
+    return text, key, f"{t} {q['asof']} · {q['model_name']}" + ('' if q['side'] == 'long' else ' · 做空') + ('' if q['tf'] == 'D' else ' · 周K')
 
 
 def chat_explain(body):
     """一键解释进对话框：程序拼的，不调用 AI，作为一条助手消息存进对话。"""
     t = body.get('ticker', '')
-    lp = learn.build(t, ai_model(body.get('model')), body.get('asof') or None)
+    a = prof(body)
+    lp = learn.build(t, a['model'], body.get('asof') or None, a['side'], a['horizon'], a['tf'])
     conv = chat.load(body.get('id') or '') or chat.new(t)
     if not conv['messages']:
         conv['title'] = '一键解释 · ' + lp['ticker'] + ' ' + lp['asof'][5:]
     conv['messages'].append(dict(role='assistant', kind='explain', at=chat.now_text(), text=chat.explain_text(lp), learn=lp))
     chat.save(conv)
     return dict(ok=True, conv=chat.public(conv))
+
+
+def model_library():
+    """The 模型 page: where each model comes from, what it checks, and every parameter with its source (said in the recording, or estimated)."""
+    import breakout as bo
+    import houshou as hs
+    Pv, Fx = panel.P, panel.F
+    four = [dict(name='地量 = 近多少根里成交量最小', v=Pv['n_vol'], src='video'), dict(name='扇子用哪一条线', v=Pv['fan'], src='video'),
+            dict(name='止损垫在最低点下面', v=f"{Pv['stop'] * 100:g}%", src='video'), dict(name='先跌够多少才开始找底（“跌两成”）', v=f"{Pv['dd'] * 100:g}%", src='est'),
+            dict(name='放量大阳：成交量至少是前 5 天均量的几倍', v=Pv['vol_mult'], src='est'), dict(name='参考高点：近多少根的最高价', v=Fx['hi_win'], src='est'),
+            dict(name='底背离：MACD 柱的低点至少早于价格低点多少根', v=Fx['div_gap'], src='est'), dict(name='第一目标：低点前多少根的最高价', v=Fx['tgt_win'], src='est'),
+            dict(name='最长持有多少根', v=Fx['max_hold'], src='est'), dict(name='第二目标：收回这一轮跌幅的多少（面板加的参考位）', v=quant.FOUR_T2, src='est')]
+    hv = hs.VIDEO
+    hou = [dict(name='离成本线超过多少就不追', v=f"{hv['far'] * 100:g}%", src='video'), dict(name='两段跌幅相差不到多少算等长', v=f"{hv['abcd_tol'] * 100:g}%", src='video'),
+           dict(name='缩量：量缩到下跌段的多少以下', v=f"{hv['dry'] * 100:g}%", src='video'), dict(name='止损放在 D 点外侧', v=f"{hv['stop'] * 100:g}%", src='video')] + \
+          [dict(name=hs.EST_NOTE.get(k, k), v=v, src='est') for k, v in hs.EST.items()]
+    brk = [dict(name=bo.VIDEO_NOTE.get(k, k), v=v, src='video') for k, v in bo.VIDEO.items()] + [dict(name=bo.EST_NOTE.get(k, k), v=v, src='est') for k, v in bo.EST.items()]
+    notes_ = dict(four=['回测结论：' + str((panel.backtest_summary() or {}).get('verdict', '证据不足')) + '。所以这里只做观察。', '规则在 engine.py 里，这个文件不许改；面板只负责把它的结果摆出来。'],
+                  houshou=['没有回测过。按估算的参数，三只标的的日线上三项从没有同时成立过，卡在「缩量刺破收回」这一项。', '做空一侧是把同一套规则上下翻过来（价格取负后跑同一段代码），录屏里没有讲过。',
+                           '第二目标是从录屏那一格的数字反推的，录屏没有明说算法。'],
+                  breakout=['录屏「卧底战法」那一段给了三条要点（破线看收盘、破线量过前 5 根均量 1.5 倍、反抽量缩到破线日一半以内），0.2 照这三条改过。这是重写的，不是原作者的代码。',
+                            '没有回测过。查过的开源实现里，有一位作者自己报告这类形态样本外是亏的（每笔 −0.27R，763 笔）。', '破位和反抽的容差按波动率（ATR）放缩，倍数取几份开源实现的中间值。'])
+    refs = dict(breakout=['TradingSignalBot/tradingview-strategies（MIT）', 'hanreywt/Screener_Alert', 'ascendro-ca/break-and-retest', 'neurotrader888/TechnicalAnalysisAutomation（MIT）'],
+                houshou=['karthikcyadav98/fib-extension-paper（第二目标从回踩点量）', 's-kust/anchored_vwaps（锚定 VWAP 的算法）'], four=[])
+    def generic(m):          # 建在 qmodel.py 上的模型：参数、说明、参考都写在各自的模型文件里
+        mod = m['mod']
+        ps = [dict(name=getattr(mod, 'VIDEO_NOTE', {}).get(k, k), v=v, src='video') for k, v in getattr(mod, 'VIDEO', {}).items()] + \
+             [dict(name=getattr(mod, 'EST_NOTE', {}).get(k, k), v=v, src='est') for k, v in getattr(mod, 'EST', {}).items()]
+        note = list(getattr(mod, 'NOTES', ())) or ['没有回测过。这一版是照录屏讲的规则重写的，不是原作者的代码；录屏里没给的数都标了估算。']
+        return ps, note, list(getattr(mod, 'REFS', ()))
+
+    def pack(m):
+        ps, note, ref = generic(m) if m.get('mod') else (dict(four=four, houshou=hou, breakout=brk)[m['key']], notes_[m['key']], refs[m['key']])
+        return dict({k: m[k] for k in ('key', 'name', 'version', 'tested', 'origin', 'what', 'checks')}, sides=list(m['sides']), tfs=list(m['tfs']), group=m.get('group', ''), kind=m.get('kind', 'trade'),
+                    params=ps, notes=note, refs=ref)
+
+    return dict(ok=True, models=[pack(m) for m in quant.MODELS],
+                side_names=quant.SIDE_NAME, horizons=[dict(n=n, label=quant.horizon_label(n)) for n in quant.HORIZONS], adjust=quant.ADJUST)
+
+
+def quant_scan(q):
+    """量化终端的表。给了 ticker / model / side 就只算那一格，否则算全部（3 只 × 3 个模型 × 多空）。"""
+    a = quant.norm('four', None, q.get('hz', q.get('horizon')), q.get('tf'), 'flat')
+    ts = [q['ticker']] if q.get('ticker') else list(panel.TICKERS)
+    ms = [q['model']] if q.get('model') else [m['key'] for m in quant.MODELS]
+    sides = [q['side']] if q.get('side') in ('long', 'short') else ['long', 'short']
+    if any(t not in panel.TICKERS for t in ts):
+        raise KeyError(ts[0])
+    cells = [quant.scan_cell(t, ai_model(m), s, a['horizon'], a['tf']) for t in ts for m in ms for s in sides]
+    return dict(ok=True, horizon=a['horizon'], horizon_label=quant.horizon_label(a['horizon'], a['tf']), tf=a['tf'], cells=cells,
+                models=[dict(key=m['key'], name=m['name'], tested=m['tested'], group=m.get('group', ''), kind=m.get('kind', 'trade')) for m in quant.MODELS], tickers=list(panel.TICKERS), banner=quant.BANNER)
 
 
 def ai_cached(t, asof):
@@ -281,11 +399,13 @@ def ai_cached(t, asof):
 def ai_analyze(body):
     """“让 Claude 润色”。Whatever goes wrong, the answer is still a four-question narration: the template, with a notice."""
     t = body.get('ticker')
-    x = ai_inputs(t, body.get('asof'), ai_model(body.get('model')))
-    facts, bars, bt, pos, fp, tmpl, model = x['facts'], x['bars'], x['bt'], x['pos'], x['fp'], x['tmpl'], x['model']
+    a = prof(body)
+    x = ai_inputs(t, body.get('asof'), a['model'], a['side'], a['horizon'], a['tf'], a['posmode'])
+    facts, bars, bt, pos, fp, tmpl, model, var = x['facts'], x['bars'], x['bt'], x['pos'], x['fp'], x['tmpl'], x['model'], x['variant']
+    asof = x['q']['asof']
     if not body.get('force') and not body.get('test_fake_number'):
         # 记忆：盘面和仓位都没变，就把保存的那一版原样给回去，不再调用 Claude。要重新分析得明确带 force。
-        rows = ai_cache_read(t, facts['asof'], model)
+        rows = ai_cache_read(t, asof, var)
         if rows and rows[0].get('fingerprint') == fp:
             return 200, dict(saved_view(rows[0], x), reused=True)
     if not _ai_lock.acquire(blocking=False):
@@ -296,8 +416,8 @@ def ai_analyze(body):
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='没能用上 Claude，已改用模板：' + got['error'], code=got.get('code'), rule_model=model)
         allowed = x['allowed']
         # Claude 只说在图上标哪一天、哪个位置；价位由这里从 K 线数据里取。直接给的价位必须是输入里有的数。
-        narr, why = narrate.normalize(got['raw'], facts, tmpl, narrate.chart_data(t, facts['asof']), {round(a, 2) for a in allowed},
-                                      positive=x['positive'], link_evidence=model == 'four')
+        narr, why = narrate.normalize(got['raw'], facts, tmpl, narrate.chart_data(t, asof, quant.bars(t, a['tf'])), {round(n, 2) for n in allowed},
+                                      positive=x['positive'], link_evidence=x['four'])
         if narr is None:
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice=f'AI 输出的结构不对（{why}），已改用模板', code='shape', rule_model=model)
         if body.get('test_fake_number'):                # 测试开关：往 Claude 的输出里塞一个假数字，看核对能不能拦住
@@ -305,7 +425,7 @@ def ai_analyze(body):
         bad = narrate.bad_numbers(narr, allowed)
         if bad and CFG.get('ai_strict_numbers', False):     # 严格模式：有一个对不上就整段不用
             return 200, narration_result(t, facts, bt, tmpl, 'template', notice='AI 输出含无法核对的数字，已改用模板', code='numbers', unverified=bad[:8], rule_model=model)
-        res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], rule_model=model, positions_sent=len(pos['positions']) if pos else 0,
+        res = narration_result(t, facts, bt, narr, 'claude', model=got['model'], rule_model=model, variant=var, profile=a, positions_sent=len(pos['positions']) if pos else 0,
                                created_at=time.strftime('%Y-%m-%d %H:%M:%S'), fingerprint=fp,
                                tokens_in=got.get('tokens_in'), tokens_out=got.get('tokens_out'),
                                notes_used=len(x['notes']['notes']) if x['notes'] else 0)
@@ -313,7 +433,7 @@ def ai_analyze(body):
             res.update(unverified=bad[:20], code='numbers',
                        notice=f'有 {len(bad)} 个数字在引擎输出和 K 线数据里找不到（已标黄）：可能是它自己算的，也可能写错了，以图和引擎为准。')
         try:
-            ai_cache_add(t, facts['asof'], res, model)
+            ai_cache_add(t, asof, res, var)
         except OSError:
             res['cache_error'] = True
         return 200, res
@@ -425,7 +545,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(409, dict(ok=False, error='上一条还没答完。'))
         try:
             conv = chat.load(body.get('id') or '') or chat.new(t)
-            ctx, key, chip = chat_context(t, body.get('asof') or None, body.get('model'))
+            ctx, key, chip = chat_context(t, body.get('asof') or None, body)
             attach = key != conv.get('ctx_key')        # 图表数据变了（换了标的、日期、模型，或多了备注）才再带一份
             if not any(m['role'] == 'user' for m in conv['messages']) and (not conv['messages'] or conv['title'] == '新对话'):
                 conv['title'] = chat.title_from(text)
@@ -488,13 +608,24 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == '/api/data/version':
                     return self._send(200, {t: panel.freshness(t) for t in panel.TICKERS})
                 if u.path == '/api/ai/narrate':
-                    return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None, q.get('model')))
+                    a = prof(q)
+                    return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None, a['model'], a['side'], a['horizon'], a['tf'], a['posmode']))
                 if u.path == '/api/notes':        # K 线上的备注：事件日、新闻标题、联网搜到的、手写的，以及各自的时效
                     return self._send(200, notes.payload(q.get('ticker', ''), q.get('asof') or None))
                 if u.path == '/api/learn':        # 「一键解释」：把这一天的结果讲成大白话，不调用 AI
-                    return self._send(200, learn.build(q.get('ticker', ''), ai_model(q.get('model')), q.get('asof') or None))
+                    a = prof(q)
+                    return self._send(200, learn.build(q.get('ticker', ''), a['model'], q.get('asof') or None, a['side'], a['horizon'], a['tf']))
                 if u.path == '/api/quant':
-                    return self._send(200, quant.result(q.get('ticker', ''), ai_model(q.get('model') or 'houshou'), q.get('asof') or None))
+                    a = prof(q, 'houshou')
+                    return self._send(200, quant.result(q.get('ticker', ''), a['model'], q.get('asof') or None, a['side'], a['horizon'], a['tf'], a['posmode']))
+                if u.path == '/api/quant/models':
+                    return self._send(200, model_library())
+                if u.path == '/api/quant/scan':
+                    return self._send(200, quant_scan(q))
+                if u.path == '/api/quant/tasks':
+                    return self._send(200, tasks.listing(force=q.get('force') == '1'))
+                if u.path == '/api/quant/runs':
+                    return self._send(200, tasks.runs(ticker=q.get('ticker') or None))
                 if u.path == '/api/ai/history':
                     return self._send(200, ai_history(q.get('ticker', '')))
                 if u.path == '/api/chat/list':
@@ -507,7 +638,8 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == '/api/state':
                     st = panel.state_at(q.get('ticker', ''), q.get('asof') or None)
                     st['card'] = narrate.card_from_state(st, panel.backtest_summary())     # 规则模型卡片：只来自引擎
-                    st['ai_saved'] = {m: os.path.exists(_ai_cache_path(st['ticker'], st['asof'], m)) for m in ('four', 'houshou')}   # 这一天、各个模型有没有保存过 Claude 解说
+                    saved = ai_variants(st['ticker'], st['asof'])       # 这一天保存过 Claude 解说的组合：切换模型或方向不清空
+                    st['ai_saved'] = dict(four='' in saved, houshou='houshou' in saved, any=bool(saved), variants=saved)
                     return self._send(200, st)
                 if u.path == '/api/portfolio':
                     return self._send(200, portfolio.payload())
@@ -524,7 +656,7 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == '/api/avwap':
                     return self._send(200, panel.manual_avwap(q.get('ticker', ''), q.get('anchor', ''), q.get('asof') or None))
                 return self._send(404, dict(ok=False, error='没有这个接口。'))
-            rel = 'index.html' if u.path in ('/', '') else u.path.lstrip('/')
+            rel = 'index.html' if u.path in ('/', '') else 'terminal.html' if u.path == '/terminal' else u.path.lstrip('/')
             if rel.startswith('static/'):
                 rel = rel[len('static/'):]
             full = os.path.realpath(os.path.join(STATIC, rel))
@@ -558,7 +690,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == '/api/quant/narrate':        # 补充指令 3 的接口名：claude 为真才调用 Claude，否则给模板和保存过的那一版
                 if body.get('claude'):
                     return self._send(*ai_analyze(body))
-                return self._send(200, ai_narrate(body.get('ticker', ''), body.get('asof') or None, body.get('model') or 'houshou'))
+                a = prof(body, 'houshou')
+                return self._send(200, ai_narrate(body.get('ticker', ''), body.get('asof') or None, a['model'], a['side'], a['horizon'], a['tf'], a['posmode']))
             if u.path == '/api/chat/send':
                 return self._chat_send(body)
             if u.path == '/api/chat/explain':
@@ -578,7 +711,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*notes_translate(body))
             if u.path == '/api/quant/anchor':         # 手动成本锚点：date 为空就是清除，回到自动
                 t = body.get('ticker', '')
-                return self._send(200, dict(ok=True, ticker=t, anchor=quant.set_anchor(t, body.get('date') or None)))
+                return self._send(200, dict(ok=True, ticker=t, anchor=quant.set_anchor(t, body.get('date') or None, body.get('side'), body.get('tf'))))
+            if u.path == '/api/quant/tasks':          # 盯盘任务：新建、暂停/继续、删除、标为已读
+                op = body.get('op')
+                if op == 'add':
+                    tasks.add(body)
+                elif op in ('pause', 'resume', 'delete', 'seen'):
+                    tasks.update(body.get('id') or None, enabled=dict(pause=False, resume=True).get(op), delete=op == 'delete', seen=op == 'seen')
+                else:
+                    raise ValueError('不认识的操作。')
+                return self._send(200, tasks.listing(force=op == 'resume'))
+            if u.path == '/api/quant/run':            # 分析记录：点一次「AI 分析当前图表」记一行
+                return self._send(200, dict(ok=True, run=tasks.log_run(body, body.get('ai'))))
+            if u.path == '/api/quant/runs/clear':
+                return self._send(200, dict(ok=tasks.clear_runs()))
             return self._send(404, dict(ok=False, error='没有这个接口。'))
         except KeyError:
             return self._send(404, dict(ok=False, error='没有这个标的。'))

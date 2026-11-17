@@ -185,7 +185,7 @@ class ReadingsByDay(unittest.TestCase):
         self.assertEqual((nar['other']['from_other'], nar['other']['rule_model'], nar['other']['source']), (True, 'four', 'claude'))
         self.assertEqual(nar['other']['narration']['hook'], '停，先别急着抄')
         self.assertEqual(len(FakeClaude.seen), n)                                                        # 只是把保存的那份拿出来，不调用
-        self.assertEqual(get('/api/state?ticker=QQQ&asof=2016-05-16')['ai_saved'], {'four': True, 'houshou': False})
+        self.assertEqual(get('/api/state?ticker=QQQ&asof=2016-05-16')['ai_saved'], {'four': True, 'houshou': False, 'any': True, 'variants': ['']})
         http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2016-05-16', 'model': 'houshou'})
         nar = get('/api/ai/narrate?ticker=QQQ&asof=2016-05-16&model=houshou')
         self.assertIn('polished', nar); self.assertNotIn('other', nar)                                   # 这个模型有了自己的，就用自己的

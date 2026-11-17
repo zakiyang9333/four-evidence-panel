@@ -24,3 +24,5 @@ wip_quant/
 data/notes/
 # AI 对话记录是个人的，只留在本机
 data/chats/
+# 盯盘任务和分析记录是本机状态
+data/quant/

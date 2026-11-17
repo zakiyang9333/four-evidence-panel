@@ -195,9 +195,21 @@ function rebuildIndicators() {
     ind.hist = add(LW.HistogramSeries, Object.assign({ priceFormat: { type: 'price', precision: 3, minMove: 0.001 } }, quiet), p);
     ind.dif = add(LW.LineSeries, Object.assign({ color: '#e6e8ee', lineWidth: 1 }, quiet), p);
     ind.dea = add(LW.LineSeries, Object.assign({ color: C.vwap, lineWidth: 1 }, quiet), p);
+    p++;
   }
+  // 录屏里那几样常用工具：布林带画在主图上，RSI、KDJ、ATR 各占一排副图。只是显示，规则判定在后端
+  const line = (color, pane, extra) => add(LW.LineSeries, Object.assign({ color, lineWidth: 1 }, quiet, extra || {}), pane);
+  const p2 = { priceFormat: { type: 'price', precision: 2, minMove: 0.01 } };
+  if (S.ind.boll) { ind.bmid = line('#e6e8ee', 0); ind.bup = line('#7dd3fc', 0); ind.blow = line('#f0abfc', 0); }
+  if (S.ind.rsi) {
+    ind.rsiPane = p; ind.rsi = line('#c4b5fd', p, p2);
+    [30, 50, 70].forEach(v => ind.rsi.createPriceLine({ price: v, color: '#5b6376', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' }));
+    p++;
+  }
+  if (S.ind.kdj) { ind.kdjPane = p; ind.kk = line('#e6e8ee', p, p2); ind.kd = line(C.vwap, p, p2); ind.kj = line('#f472b6', p, p2); p++; }
+  if (S.ind.atr) { ind.atrPane = p; ind.atr = line('#7dd3fc', p); p++; }
   chart.panes().forEach((pn, k) => pn.setStretchFactor(k === 0 ? 3.6 : 1));
-  $('#indCount').textContent = (S.ind.vol ? 1 : 0) + (S.ind.macd ? 1 : 0);
+  $('#indCount').textContent = ['vol', 'macd', 'boll', 'rsi', 'kdj', 'atr'].filter(k => S.ind[k]).length;
   if (S.bars) applyData();
 }
 
@@ -215,6 +227,8 @@ function buildData() {
     D.dif[i] = { time: t, value: b.dif[i] };
     D.dea[i] = { time: t, value: b.dea[i] };
   }
+  const pts = a => (a || []).map((v, i) => (v == null ? { time: b.d[i] } : { time: b.d[i], value: v }));
+  ['rsi', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_up', 'boll_low', 'atr'].forEach(k => { D[k] = pts(b[k]); });
 }
 
 function applyData() {
@@ -224,6 +238,10 @@ function applyData() {
   candle.setData(D.candle.slice(0, m));
   if (ind.vol) { ind.vol.setData(D.vol.slice(0, m)); ind.vma5.setData(D.vma5.slice(0, m)); ind.vma10.setData(D.vma10.slice(0, m)); }
   if (ind.hist) { ind.hist.setData(D.hist.slice(0, m)); ind.dif.setData(D.dif.slice(0, m)); ind.dea.setData(D.dea.slice(0, m)); }
+  if (ind.bmid) { ind.bmid.setData(D.boll_mid.slice(0, m)); ind.bup.setData(D.boll_up.slice(0, m)); ind.blow.setData(D.boll_low.slice(0, m)); }
+  if (ind.rsi) ind.rsi.setData(D.rsi.slice(0, m));
+  if (ind.kk) { ind.kk.setData(D.kdj_k.slice(0, m)); ind.kd.setData(D.kdj_d.slice(0, m)); ind.kj.setData(D.kdj_j.slice(0, m)); }
+  if (ind.atr) ind.atr.setData(D.atr.slice(0, m));
   applyLive();
   S.rev++;
 }
@@ -329,6 +347,9 @@ function placeLegends() {
   };
   put($('#legVol'), S.ind.vol ? ind.volPane : null);
   put($('#legMacd'), S.ind.macd ? ind.macdPane : null);
+  put($('#legRsi'), S.ind.rsi ? ind.rsiPane : null);
+  put($('#legKdj'), S.ind.kdj ? ind.kdjPane : null);
+  put($('#legAtr'), S.ind.atr ? ind.atrPane : null);
   let sw = 64;
   try { sw = chart.priceScale('right').width(); } catch (e) { /* 用默认 */ }
   $('#evidence').style.right = (sw + 12) + 'px';
@@ -641,6 +662,22 @@ async function setTicker(t, date) {
   queueState(true);
 }
 
+/* K 线级别：顶栏的「日线 / 周线」和「AI 量化」窗口头部的下拉是同一个开关 */
+function setTf(v) {
+  v = v === 'W' ? 'W' : 'D';
+  if (v === S.tf || !S.bars) return;
+  S.tf = v;
+  setTicker(S.ticker, S.replayOn && S.asof < lastIdx() ? asofDate() : null);
+}
+/* 回到某只标的、某个级别、某一天（任务和分析记录里点一行）：asof 为空就是最新一根 */
+async function goTo(t, tf, asof) {
+  if (S.view !== 'chart') setView('chart');
+  S.tf = tf === 'W' ? 'W' : 'D';
+  await setTicker(t, asof || null);
+  if (!asof) setReplay(false);
+}
+function openSide() { if (!S.sideOpen) { S.sideOpen = true; store.set('side', true); renderTop(); syncUrl(); } }
+
 function setAsof(i, keepView) {
   i = clamp(i, 1, lastIdx());
   if (i === S.asof) return;
@@ -748,7 +785,12 @@ function renderLegend() {
     '<span>开 <b class="' + cls + '">' + fmtP(b.o[i]) + '</b></span><span>高 <b class="' + cls + '">' + fmtP(b.h[i]) + '</b></span>' +
     '<span>低 <b class="' + cls + '">' + fmtP(b.l[i]) + '</b></span><span>收 <b class="' + cls + '">' + fmtP(b.c[i]) + '</b></span>' +
     '<span class="' + cls + '">' + fmtPct(chg) + '</span>' + (src ? '<span class="src">单一来源：' + esc(src) + '</span>' : '') +
+    (S.ind.boll && b.boll_mid && b.boll_mid[i] != null ? '<span class="bl"><b>BOLL(20,2)</b> 上轨 ' + fmtP(b.boll_up[i]) + ' 中轨 ' + fmtP(b.boll_mid[i]) + ' 下轨 ' + fmtP(b.boll_low[i]) + '</span>' : '') +
     (S.asof === lastIdx() ? liveLegend() : '');
+  const f2 = x => (x == null ? '—' : x.toFixed(2));
+  if (b.rsi) $('#legRsi').innerHTML = '<b>RSI(14)</b><span class="k1">' + f2(b.rsi[i]) + '</span><span>参考线 30 / 50 / 70</span>';
+  if (b.kdj_k) $('#legKdj').innerHTML = '<b>KDJ(9,3,3)</b><span class="k1">K ' + f2(b.kdj_k[i]) + '</span><span class="k2">D ' + f2(b.kdj_d[i]) + '</span><span class="kj">J ' + f2(b.kdj_j[i]) + '</span>';
+  if (b.atr) $('#legAtr').innerHTML = '<b>ATR(14)</b><span class="k1">' + (b.atr[i] == null ? '—' : fmtP(b.atr[i])) + '</span><span>' + (b.atr[i] == null ? '' : '相当于收盘价的 ' + (b.atr[i] / b.c[i] * 100).toFixed(2) + '%') + '</span>';
   $('#legVol').innerHTML = '<b>VOL(5,10)</b><span>成交量 <b>' + fmtVol(b.v[i]) + '</b></span><span class="k1">MA5 ' + fmtVol(b.vma5[i]) + '</span><span class="k2">MA10 ' + fmtVol(b.vma10[i]) + '</span>' +
     (!isDaily() ? '<span>周线不标地量（地量按日线判定）</span>' : D.low && D.low.has(i) ? '<span class="lv">■ 地量日（60 日最小量）</span>' : '<span class="lv">■ 蓝柱 = 地量日</span>');
   $('#legMacd').innerHTML = '<b>MACD(12,26,9)</b><span class="k1">DIF ' + b.dif[i].toFixed(3) + '</span><span class="k2">DEA ' + b.dea[i].toFixed(3) + '</span>' +
@@ -778,7 +820,7 @@ function renderEvidence() {
 const WHY = { target: '到目标', stop: '止损', time: '到期', open: '未了结', 'stop(open)': '止损' };
 function renderSide() {
   const st = stateFresh() ? S.state : null, ai = S.meta ? S.meta.ai : null;
-  $('#sideSub').textContent = '按日线 · 收盘确认' + (S.replayOn && S.bars && S.asof < lastIdx() ? ' · 回放 ' + asofDate() : '');
+  $('#sideSub').textContent = (isDaily() ? '日线' : '周线') + ' · 收盘确认 · 历史数据重放' + (S.replayOn && S.bars && S.asof < lastIdx() ? ' · 回放 ' + asofDate() : '');
   if (S.meta && S.meta.backtest) {
     const b = S.meta.backtest;
     $('#btCard').textContent = '结论：' + b.verdict + '。三只标的合计 ' + b.n + ' 笔，平均 ' + b.mean_r + 'R；对照组（跌够 20% 后随便挑一天买）平均 ' + b.control_mean_r + 'R，p = ' + b.p + '，不显著。所以这里只做观察。';
@@ -1061,13 +1103,7 @@ function bind() {
     c.onchange = () => { S.ind[c.dataset.ind] = c.checked; store.set('ind', S.ind); if (c.dataset.ind === 'live') { applyLive(); renderLegend(); pollLive(); } else if (/^(marks|pf|pfval)$/.test(c.dataset.ind)) { candle.applyOptions({ autoscaleInfoProvider: scaleProvider }); S.rev++; } else { noteSpan(); rebuildIndicators(); focusView(); renderLegend(); } };
   });
   $$('#viewSeg button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
-  $$('#tfSeg [data-tf]').forEach(b => {
-    b.onclick = () => {
-      if (b.dataset.tf === S.tf) return;
-      S.tf = b.dataset.tf;
-      setTicker(S.ticker, S.replayOn && S.bars && S.asof < lastIdx() ? asofDate() : null);
-    };
-  });
+  $$('#tfSeg [data-tf]').forEach(b => { b.onclick = () => setTf(b.dataset.tf); });
   $('#dataDate').onclick = () => { const lrf = S.meta && S.meta.last_refresh_file; if (lrf) showRefreshFile(lrf); };
   $('#replayBtn').onclick = () => setReplay(!S.replayOn);
   $('#rpRange').addEventListener('input', e => setAsof(Number(e.target.value)));
@@ -1079,9 +1115,12 @@ function bind() {
   $('#sideClose').onclick = () => { S.sideOpen = false; store.set('side', false); renderTop(); syncUrl(); };
   window.FENarrate.init({
     api, toast, ticker: () => S.ticker, asof: () => asofDate(), ready: () => !!stateFresh(), flash: flashStep,
-    model: () => window.FEQuant.model(),
-    saved: () => !!(stateFresh() && S.state.ai_saved && (S.state.ai_saved.four || S.state.ai_saved.houshou)),      // 任何一个模型今天分析过都算：切换模型不清空
-    gotoDay: (d, m) => { if (m && m !== window.FEQuant.model()) window.FEQuant.setModel(m); if (d === S.bars.d[lastIdx()]) setReplay(false); else setReplay(true, d); },
+    model: () => window.FEQuant.model(), side: () => window.FEQuant.side(), query: () => window.FEQuant.query(), profile: () => window.FEQuant.profile(),
+    saved: () => !!(stateFresh() && S.state.ai_saved && S.state.ai_saved.any),      // 任何一个组合今天分析过都算：切换模型或方向不清空
+    gotoDay: (d, row) => {          // 解读存档里点一行：回到那一天，模型、方向、周期、级别也换成当时的
+      if (row && row.model) window.FEQuant.goTo({ ticker: S.ticker, model: row.model, side: row.side || 'long', horizon: row.horizon || 20, tf: row.tf || 'D' }, d === S.bars.d[lastIdx()] && (row.tf || 'D') === S.tf ? null : d);
+      else if (d === S.bars.d[lastIdx()]) setReplay(false); else setReplay(true, d);
+    },
     fake: () => new URLSearchParams(location.search).get('aifake') === '1' || store.get('aifake', false),   // 测试开关：往 Claude 输出里塞假数字
     clearFlash,
     onReveal: n => { S.reveal = n; renderEvidence(); },      // 四问出到第几问，证据条就亮到第几条
@@ -1091,7 +1130,7 @@ function bind() {
     redraw: () => { S.rev++; }, resized: () => { setTimeout(() => tick(true), 0); }, replayTo: d => setReplay(true, d), refreshState: () => queueState(true),
     setAuto: on => { if (S.auto !== on) { S.auto = on; store.set('auto', on); renderTop(); syncPriceLines(); S.rev++; } },
     modelChanged: () => { renderEvidence(); renderSide(); syncPriceLines(); S.rev++; window.FEChat.onState(); },
-    narr: window.FENarrate,
+    narr: window.FENarrate, setTf, goto: goTo, openSide,
   });
   window.FENotes.init({
     api, toast, S, esc, X, Y, g: () => ctx, OV: () => OV, label, stateFresh: () => !!stateFresh(), isDaily, asofDate, ptFromEvent,
@@ -1099,10 +1138,11 @@ function bind() {
     translateAuto: () => !!(S.meta && S.meta.ai && S.meta.ai.translate_auto),
   });
   window.FEChat.init({
-    api, toast, esc, S, stateFresh: () => !!stateFresh(), asofDate, model: () => window.FEQuant.model(), resized: () => { setTimeout(() => tick(true), 0); },
+    api, toast, esc, S, stateFresh: () => !!stateFresh(), asofDate, model: () => window.FEQuant.model(), profile: () => window.FEQuant.profile(), resized: () => { setTimeout(() => tick(true), 0); },
+    setTab: n => window.FEQuant.setTab(n), tab: () => window.FEQuant.tab(), sideOpen: () => S.sideOpen,
     flashEvidence: k => flashStep(k, '', 'learn' + k, [], false),
     flashPane: which => { const on = which === 'vol' ? S.ind.vol : S.ind.macd; if (on) flashPane(which === 'vol' ? ind.volPane : ind.macdPane); else toast('这排副图现在是关着的，在“指标”里打开就能看到。'); },
-    openSide: () => { if (!S.sideOpen) { S.sideOpen = true; store.set('side', true); renderTop(); } },
+    openSide,
     store, aiEnabled: () => !!(S.meta && S.meta.ai && S.meta.ai.enabled), aiReason: () => (S.meta && S.meta.ai && S.meta.ai.reason) || '',
   });
   $('#refreshBtn').onclick = refreshData;

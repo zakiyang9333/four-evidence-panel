@@ -228,8 +228,9 @@ class Server:
         self.cache = tempfile.mkdtemp(prefix='fe_aicache_')   # AI 解读也存到临时目录，不碰 cache/ai
         self.notes = tempfile.mkdtemp(prefix='fe_notes_')     # 备注也存到临时目录，不碰 data/notes，不连 Yahoo
         self.chats = tempfile.mkdtemp(prefix='fe_chats_')     # 对话记录同样放临时目录
+        self.tasks = tempfile.mkdtemp(prefix='fe_tasks_')     # 盯盘任务和分析记录也放临时目录，不碰 data/quant
         e.update(FE_PORT=str(self.port), FE_PORTFOLIO_DIR=self.empty, FE_CACHE_DIR=self.cache, FE_LIVE='0', FE_NOTES_DIR=self.notes, FE_NOTES_OFFLINE='1',
-                 FE_CHAT_DIR=self.chats)   # 测试不连 Yahoo
+                 FE_CHAT_DIR=self.chats, FE_TASKS_DIR=self.tasks)   # 测试不连 Yahoo
         e.update(env or {})
         self.p = subprocess.Popen([sys.executable, os.path.join(ROOT, 'server.py')], cwd=ROOT, env=e, stdout=self.log, stderr=subprocess.STDOUT)
         for _ in range(100):
@@ -248,6 +249,7 @@ class Server:
     def stop(self):
         self.p.terminate(); self.p.wait(10); self.log.close(); os.unlink(self.log.name)
         shutil.rmtree(self.empty, ignore_errors=True); shutil.rmtree(self.cache, ignore_errors=True); shutil.rmtree(self.notes, ignore_errors=True); shutil.rmtree(self.chats, ignore_errors=True)
+        shutil.rmtree(self.tasks, ignore_errors=True)
 
 
 class NoKey(unittest.TestCase):
@@ -269,7 +271,7 @@ class NoKey(unittest.TestCase):
         for t in ('SPCX', 'NVDA', 'QQQ'):
             self.assertEqual(http(p, f'/api/bars?ticker={t}')[0], 200)
             self.assertEqual(json.loads(http(p, f'/api/state?ticker={t}&asof=2026-11-13')[1])['asof'], '2026-11-13')
-        code, body = http(p, '/'); self.assertEqual(code, 200); self.assertIn('四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据', body)
+        code, body = http(p, '/'); self.assertEqual(code, 200); self.assertIn('四证：回测证据不足 ｜ 后手战法、破位反抽：尚未回测 ｜ 仅观察，不构成买卖依据', body)
         self.assertEqual(http(p, '/static/app.js')[0], 200)
         self.assertEqual(http(p, '/static/vendor/lightweight-charts.standalone.production.js')[0], 200)
         # 没有密钥：模板版解说照常工作；点“润色”也只是退回模板并说明原因
@@ -495,8 +497,8 @@ class WithKey(unittest.TestCase):
         self.assertEqual(len(FakeClaude.seen), n + 1)
         self.assertNotIn('reused', forced)
         # 状态里带着“这一天有没有保存过”，前端据此决定要不要直接显示
-        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-18')[1])['ai_saved'], {'four': True, 'houshou': False})   # 每个模型各记各的
-        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-19')[1])['ai_saved'], {'four': False, 'houshou': False})
+        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-18')[1])['ai_saved'], {'four': True, 'houshou': False, 'any': True, 'variants': ['']})   # 每个组合各记各的
+        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2009-03-19')[1])['ai_saved'], {'four': False, 'houshou': False, 'any': False, 'variants': []})
         self.assertEqual(http(self.s.port, '/api/ai/cached?ticker=XXXX&asof=2009-03-18')[0], 404)
 
     def test_houshou_model_gets_its_own_reading_and_memory(self):
@@ -508,13 +510,14 @@ class WithKey(unittest.TestCase):
         self.assertEqual((res['source'], res['rule_model'], four['rule_model']), ('claude', 'houshou', 'four'))
         self.assertTrue(all(st['evidence'] == 0 for st in res['narration']['steps']))        # 后手模型没有四项证据可对
         sent = json.loads(FakeClaude.seen[-1][2]['messages'][0]['content'])
-        self.assertEqual(sent['quant']['selected_model'], '后手·成本线回踩 v0.1')
+        self.assertEqual(sent['quant']['selected_model'], '后手·成本线回踩 v0.2')
         self.assertEqual(sent['quant']['rule_signal']['phase'], '回落中')
         self.assertIn('写死的', FakeClaude.seen[-1][2]['system'])                             # 提示词里说了：清单跟不上走势时直接说
         self.assertTrue(os.path.exists(os.path.join(self.s.cache, 'QQQ_2016-05-16_houshou.json')))
         again = json.loads(http(self.s.port, '/api/ai/analyze', {'ticker': 'QQQ', 'asof': '2016-05-16', 'model': 'houshou'})[1])
         self.assertEqual((len(FakeClaude.seen), again['reused']), (n + 1, True))             # 记忆照样有效
-        self.assertEqual(json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2016-05-16')[1])['ai_saved'], {'four': True, 'houshou': True})
+        sv = json.loads(http(self.s.port, '/api/state?ticker=QQQ&asof=2016-05-16')[1])['ai_saved']
+        self.assertEqual((sv['four'], sv['houshou'], sv['any'], sorted(sv['variants'])), (True, True, True, ['', 'houshou']))
         nar = json.loads(http(self.s.port, '/api/ai/narrate?ticker=QQQ&asof=2016-05-16&model=four')[1])
         self.assertEqual((nar['polished']['rule_model'], nar['polished']['same_input']), ('four', True))
 

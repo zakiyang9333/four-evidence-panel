@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>四要素观察面板</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/quant.css">
 </head>
 <body>
-<div id="banner" role="note">四证：回测证据不足 ｜ 后手战法：尚未回测 ｜ 仅观察，不构成买卖依据</div>
+<div id="banner" role="note">四证：回测证据不足 ｜ 后手战法、破位反抽：尚未回测 ｜ 仅观察，不构成买卖依据</div>
 
 <header id="topbar">
   <div class="brand"><span class="logo">◆</span>四要素观察面板</div>
@@ -18,14 +19,17 @@
   <div id="tickers" class="seg" role="tablist" aria-label="标的"></div>
   <div class="seg chart-only" id="tfSeg" aria-label="周期">
     <button class="on" data-tf="D" title="日线：四要素按日线判定">日线</button>
-    <button data-tf="W" title="周线：由日线合成，只看走势；四要素仍按日线判定">周线</button>
-    <button disabled title="不做：规则只用收盘后的日线，没有盘中数据">60分</button>
+    <button data-tf="W" title="周线：由日线合成。四要素仍按日线判定；后手和破位反抽可以在周线上跑">周线</button>
   </div>
   <div class="menu chart-only" id="indMenu">
     <button id="indBtn" aria-haspopup="true">指标 <span id="indCount"></span> ▾</button>
     <div class="pop" id="indPop" hidden>
       <label><input type="checkbox" data-ind="vol"> 成交量 VOL(5,10)</label>
       <label><input type="checkbox" data-ind="macd"> MACD(12,26,9)</label>
+      <label title="主图上的三条线：中轨是 20 根均价，上下轨是中轨加减 2 个标准差"><input type="checkbox" data-ind="boll"> 布林带 BOLL(20,2)</label>
+      <label title="0 到 100。常用参考线 30 / 50 / 70"><input type="checkbox" data-ind="rsi"> RSI(14)</label>
+      <label><input type="checkbox" data-ind="kdj"> KDJ(9,3,3)</label>
+      <label title="平均真实波幅：它平时一根 K 线上下晃多大"><input type="checkbox" data-ind="atr"> ATR(14)</label>
       <label><input type="checkbox" data-ind="marks"> 四要素标记 ▲1–4</label>
       <hr>
       <label title="只是显示，不影响四要素证据的判定"><input type="checkbox" data-ind="pf"> 持仓叠加（成本、行权价、归零线）</label>
@@ -40,9 +44,9 @@
   <span id="dataDate" class="chip chart-only" title="只有收盘后的日线，没有实时行情"></span>
   <button id="dataWarn" class="chip warn chart-only" hidden></button>
   <button id="refreshBtn" class="chart-only" title="运行 prep_data.py，只追加新日期">刷新数据</button>
-  <button id="learnBtn" class="chart-only" title="看不懂？点一下，用大白话把现在屏幕上的每样东西讲一遍。程序拼的，不花钱；解释出现在 AI 对话里，可以接着问">？一键解释</button>
-  <button id="chatBtn" class="chart-only" title="一边看图一边问。有记忆，对话存在本机">AI 对话</button>
-  <button id="aiBtn" class="primary chart-only">✦ AI 量化</button>
+  <button id="learnBtn" class="chart-only" title="看不懂？点一下，用大白话把现在屏幕上的每样东西讲一遍。程序拼的，不花钱；解释出现在「AI 量化」窗口的对话页里，可以接着问">？一键解释</button>
+  <button id="chatBtn" class="chart-only" title="一边看图一边问。有记忆，对话存在本机。打开「AI 量化」窗口的对话页">AI 对话</button>
+  <button id="aiBtn" class="primary chart-only" title="打开或收起「AI 量化」窗口">✦ AI 量化</button>
 </header>
 
 <div id="views">
@@ -60,8 +64,6 @@
     <button id="clearBtn" title="清空这只标的的全部手动画线"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg><span>清空</span></button>
   </nav>
 
-  <aside id="learn" hidden aria-label="AI 对话"></aside>
-
   <section id="stage">
     <div id="chartwrap">
       <div id="chart"></div>
@@ -69,6 +71,9 @@
       <div id="legend" class="leg"></div>
       <div id="legVol" class="leg sub" hidden></div>
       <div id="legMacd" class="leg sub" hidden></div>
+      <div id="legRsi" class="leg sub" hidden></div>
+      <div id="legKdj" class="leg sub" hidden></div>
+      <div id="legAtr" class="leg sub" hidden></div>
       <div id="evidence"></div>
       <div id="qBar" hidden></div>
       <div id="noteTip" hidden></div>
@@ -89,60 +94,108 @@
   </section>
 
   <aside id="side" aria-label="AI 量化">
-    <div class="side-head">
-      <span class="dot"></span><b>AI 量化</b><span id="sideSub" class="muted"></span>
+    <div class="side-head qw-head">
+      <span class="dot"></span><b>AI 量化</b>
+      <div class="menu" id="qTfMenu">
+        <button id="qTfBtn" class="qw-pill" aria-haspopup="true" title="价格口径和 K 线级别"><span id="qTfText">拆股复权 · 日K</span><i class="chev"></i></button>
+        <div class="pop" id="qTfPop" hidden>
+          <div class="pop-title">K 线级别</div>
+          <button data-qtf="D" class="pop-item"><b>日K</b><small>一根 = 一个交易日。三个模型都能跑</small></button>
+          <button data-qtf="W" class="pop-item"><b>周K</b><small>一根 = 一周，由日线合成。四证不看周 K</small></button>
+          <div class="pop-title">价格口径</div>
+          <p class="pop-note">拆股已调整，分红没有调整。数据源只有这一种口径，所以这里不能切换。</p>
+        </div>
+      </div>
       <span class="spacer"></span>
-      <button id="sideClose" title="收起">✕</button>
+      <button id="qTerm" class="qw-term" title="量化终端：三只标的 × 三个模型 × 多空，现在各是什么状态，一张表看全（新窗口）"><i class="term-ico"></i><span class="lbl">量化终端</span><i class="ext"></i></button>
+      <div class="menu" id="qSetMenu">
+        <button id="qSetBtn" class="qw-ico" aria-haspopup="true" title="显示设置：图上画哪些线、动画快慢、图例"><svg viewBox="0 0 24 24"><path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/></svg></button>
+        <div class="pop right" id="qSetPop" hidden></div>
+      </div>
+      <button id="qExpand" class="qw-ico" title="放宽窗口 / 恢复"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg></button>
+      <button id="sideClose" class="qw-ico" title="收起窗口（顶栏的「AI 量化」再点一下就回来）"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
-    <div class="side-body">
+    <div class="qw-tabs" id="qTabs" role="tablist">
+      <button role="tab" data-qtab="analyze" class="on"><svg viewBox="0 0 24 24"><path d="M6 4v6M6 14v6M12 4v2M12 10v10M18 4v9M18 17v3"/></svg>分析</button>
+      <button role="tab" data-qtab="chat"><svg viewBox="0 0 24 24"><path d="M5 5h14v10H10l-5 4z"/></svg>对话</button>
+      <button role="tab" data-qtab="models"><svg viewBox="0 0 24 24"><path d="M12 4l8 4-8 4-8-4zM4 12l8 4 8-4M4 16l8 4 8-4"/></svg>模型</button>
+      <button role="tab" data-qtab="tasks"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>任务<i class="qw-dot" id="qTaskDot" hidden></i></button>
+    </div>
+
+    <div class="side-body" id="qPaneAnalyze" data-pane="analyze">
       <div class="card qa" id="qaCard">
-        <div class="qa-head"><span class="qa-ico">✦</span><div><b>AI 分析</b><small>日线 · 收盘确认 · 历史数据重放</small></div></div>
+        <div class="qa-head"><span class="qa-ico">✦</span><div><b>AI 分析</b><small id="sideSub">日线 · 收盘确认 · 历史数据重放</small></div></div>
         <div class="qa-row">
-          <label class="pill">模型 <select id="qModel" aria-label="规则模型"></select></label>
-          <span class="pill">周期 <b>日线</b></span>
+          <label class="pill sel" title="规则模型：换一套清单来看这张图">模型 <select id="qModel" aria-label="规则模型"></select></label>
+          <label class="pill sel" title="周期：往回看多远。表盘、结构线的回看根数和历史触发往后数的根数都跟着它变">周期 <select id="qHz" aria-label="周期"></select></label>
         </div>
         <div class="qa-row">
-          <span class="pill" id="qPos" title="从 portfolio_state.json 读，只读">持仓 <b>—</b></span>
-          <span class="seg mini" aria-label="方向"><button class="on" id="qLong">↗ 做多</button><button id="qShort" disabled title="没有做空规则">↘ 做空</button></span>
+          <label class="pill sel" id="qPosWrap" title="持仓：默认照账户文件读（只读）。也可以假设自己未持仓、有多单或有空单，只改说明文字，不改任何计算">持仓 <select id="qPos" aria-label="持仓"></select></label>
+          <span class="seg mini dir" id="qDir" role="group" aria-label="方向">
+            <button id="qLong" data-side="long" class="on" title="做多：用这个模型做多一侧的规则来看"><svg viewBox="0 0 24 24"><path d="M4 16l6-6 4 4 6-7M15 7h5v5"/></svg>做多</button>
+            <button id="qShort" data-side="short" title="做空：用这个模型做空一侧的规则来看。只是换一个方向分析，不会下单"><svg viewBox="0 0 24 24"><path d="M4 8l6 6 4-4 6 7M15 17h5v-5"/></svg>做空</button>
+          </span>
         </div>
-        <button id="qRun" class="primary big" disabled>AI 分析当前图表</button>
-        <div class="muted small" id="qHint">结构 → 规则信号 → 划线 → AI 深度解读，步骤见下方。</div>
+        <button id="qRun" class="primary big" disabled>✦ AI 分析当前图表</button>
+        <div class="muted small" id="qHint">结构分析与规则信号均基于历史数据重放，仅供研究学习。</div>
       </div>
       <div class="card thin" id="qSteps" hidden></div>
 
-      <div class="sec-title">当前图表 <span class="qtag" id="qLabel"></span></div>
-      <div class="card" id="qScore"><div class="muted small">计算中…</div></div>
+      <div class="card qchart" id="qChartCard">
+        <div class="qc-head"><div><b>当前图表</b><small id="qChartSub">日线 · 拆股已调整 · 历史数据重放</small></div><span class="qtag" id="qLabel"></span></div>
+        <div id="qScore"><div class="muted small">计算中…</div></div>
+      </div>
 
-      <div class="sec-title">⏱ 时效与备注 <span class="muted small">每样信息有多新，那几天发生过什么</span></div>
-      <div class="card thin" id="noteCard"></div>
+      <div class="sec-title">◎ 规则模型信号 <span class="muted small" id="qWeekNote"></span></div>
+      <div id="sigCard" class="card"></div>
+      <div id="tiles" class="tiles"></div>
+      <div id="qPosNote" class="card thin posnote" hidden></div>
+      <div id="qExtra"></div>
+      <div id="narrWatch" class="card thin" hidden></div>
 
       <div class="sec-title">✦ AI 深度解读 <span class="qtag" id="narrSrc" hidden></span><span class="muted small" id="narrMeta"></span></div>
       <div class="card narr" id="narrCard">
         <div class="narr-actions">
-          <button id="aiRun" class="primary" disabled title="按视频的四问走一遍：量 → MACD → 扇子 → 成本线。模板版，不调用 API，不花钱">✦ AI 分析</button>
+          <button id="aiRun" class="primary" disabled title="按所选模型的几问走一遍。模板版，不调用 API，不花钱">✦ AI 分析</button>
           <button id="aiPolish" hidden>让 Claude 润色（会计费）</button>
           <button id="aiSkip" hidden>跳过动画</button>
         </div>
         <div id="aiHint" class="muted small"></div>
         <div id="narrNotice" class="narr-notice" hidden></div>
         <div id="narr" hidden></div>
-        <details id="narrHist"><summary>分析记录（按天保存，点一行回到那一天）</summary><div class="nh-list"></div></details>
+        <details id="narrHist"><summary>解读存档（按天保存，点一行回到那一天）</summary><div class="nh-list"></div></details>
       </div>
 
-      <div class="sec-title">◎ 规则模型信号</div>
-      <div id="sigCard" class="card"></div>
-      <div id="tiles" class="tiles"></div>
-      <div id="qExtra"></div>
-      <div id="narrWatch" class="card thin" hidden></div>
-      <details id="basis" class="card thin"><summary>依据（引擎逐项输出）</summary><div id="basisBody"></div></details>
-      <div id="notes"></div>
-
-      <div class="sec-title">历史信号 <span class="muted small" id="sigCount"></span></div>
-      <div id="sigList" class="card thin"></div>
-
-      <div class="sec-title">回测</div>
-      <div id="btCard" class="card thin muted small"></div>
+      <div class="sec-title">⏱ 时效与备注 <span class="muted small">每样信息有多新，那几天发生过什么</span></div>
+      <div class="card thin" id="noteCard"></div>
       <div class="credit">图表组件：TradingView Lightweight Charts™（Apache 2.0，本地文件，不走网络）。数据是收盘后的日线，不接券商，不下单。</div>
+    </div>
+
+    <div class="side-body" id="qPaneChat" data-pane="chat" hidden>
+      <div id="learn" hidden aria-label="AI 对话"></div>
+    </div>
+
+    <div class="side-body" id="qPaneModels" data-pane="models" hidden>
+      <div class="sec-title first">模型库 <span class="muted small">每套规则从哪来、看什么、灵不灵</span></div>
+      <div id="qModelCards"><div class="muted small">加载中…</div></div>
+      <div class="sec-title">现在选的模型：<span id="qModelName"></span></div>
+      <div id="qModelDetail"></div>
+      <div id="fourDetail">
+        <details id="basis" class="card thin"><summary>依据（引擎逐项输出）</summary><div id="basisBody"></div></details>
+        <div id="notes"></div>
+        <div class="sec-title">历史信号 <span class="muted small" id="sigCount"></span></div>
+        <div id="sigList" class="card thin"></div>
+        <div class="sec-title">回测</div>
+        <div id="btCard" class="card thin muted small"></div>
+      </div>
+    </div>
+
+    <div class="side-body" id="qPaneTasks" data-pane="tasks" hidden>
+      <div class="sec-title first">盯盘任务 <span class="muted small">每次有新 K 线，替你把清单看一眼</span></div>
+      <div class="card thin" id="qTaskAdd"></div>
+      <div id="qTaskList"></div>
+      <div class="sec-title">分析记录 <span class="muted small" id="qRunCount"></span></div>
+      <div id="qRunList" class="card thin"></div>
     </div>
   </aside>
 </main>

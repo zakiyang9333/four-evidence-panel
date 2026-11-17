@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>量化终端 · 四要素观察面板</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/quant.css">
+<style>
+body{overflow:auto;display:block}
+#tWrap{max-width:1500px;margin:0 auto;padding:14px 18px 40px;display:flex;flex-direction:column;gap:14px}
+#tHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#tHead h1{font-size:18px;margin:0;display:flex;align-items:center;gap:8px}
+#tHead .seg button{padding:4px 12px}
+.t-note{color:var(--mut);font-size:12px;line-height:1.6;margin:0}
+#tGrid{width:100%;border-collapse:separate;border-spacing:6px}
+#tGrid th{color:var(--mut);font-weight:600;font-size:12px;text-align:left;padding:2px 6px;white-space:nowrap}
+#tGrid th.grp{color:var(--fg);font-size:13px;border-bottom:1px solid var(--line);padding-bottom:6px}
+#tGrid th.grp small{display:block;color:var(--mut);font-weight:500;font-size:10.5px}
+#tGrid td.grp-row{color:var(--hazard);font-size:12px;font-weight:700;padding:10px 6px 2px;border-bottom:1px solid var(--line)}
+#tGrid td.tk b{font-size:13.5px;white-space:normal}#tGrid td.tk small{color:var(--hazard)}
+#tGrid td.tk{vertical-align:top;padding:8px 6px;white-space:nowrap}
+#tGrid td.tk b{font-size:16px;display:block}#tGrid td.tk small{color:var(--mut);font-size:11px;display:block;line-height:1.5}
+.cell{display:flex;flex-direction:column;gap:3px;width:100%;min-height:74px;text-align:left;white-space:normal;border-radius:12px;padding:9px 10px;background:#171c26;border:1px solid var(--line);font-size:12px;line-height:1.45}
+button.cell:hover{border-color:#3d4860}
+.cell b{font-size:13.5px}
+.cell small{color:var(--mut);font-size:11px}
+.cell.ready{border-color:#1f6f8a;background:#0f2530}.cell.ready b{color:#3dd6ff}
+.cell.risk b{color:#fcd34d}.cell.watch b{color:#7dd3fc}.cell.avoid b{color:#fca5a5}.cell.dead b{color:#c08a8a}.cell.na b{color:#8d95a8}
+.cell.off{border-style:dashed;color:#7d8598;justify-content:center;align-items:center;text-align:center;min-height:74px}
+.cell .plan{color:#d7dbe5;font-variant-numeric:tabular-nums}
+.cell.wait-load{align-items:center;justify-content:center;color:var(--mut)}
+#tSum{width:100%;border-collapse:collapse;font-size:12.5px}
+#tSum th{color:var(--mut);font-weight:500;text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+#tSum td{padding:6px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+#tSum td.pos{color:#f87171}#tSum td.neg{color:#34d399}
+.t-sec{font-size:14px;font-weight:700;margin:6px 0 0}
+</style>
+</head>
+<body>
+<div id="banner" role="note">四证：回测证据不足 ｜ 后手战法、破位反抽：尚未回测 ｜ 仅观察，不构成买卖依据</div>
+<div id="tWrap">
+  <div id="tHead">
+    <h1><i class="term-ico"></i>量化终端</h1>
+    <div class="seg" id="tHz" aria-label="周期"></div>
+    <div class="seg" id="tTf" aria-label="K 线级别"><button data-tf="D">日K</button><button data-tf="W">周K</button></div>
+    <button id="tReload" title="按现在的数据重算一遍">重新计算</button>
+    <span class="spacer"></span>
+    <span class="chip" id="tAsof"></span>
+    <button id="tBack" class="primary">回到图表</button>
+  </div>
+  <p class="t-note">一张表看全：每只标的、每个模型、做多和做空两侧，现在各是什么状态。和「AI 量化」窗口里点出来的是同一段代码算的。点任意一格，回到图表并切到那个组合。这里不接券商，不下单。</p>
+  <table id="tGrid" aria-label="状态总表"></table>
+  <div class="t-sec">历史上出现过多少次（不是回测）</div>
+  <p class="t-note">把过去每一次“条件齐”数出来，再看之后若干根 K 线里先碰到第一目标还是先越过止损。没有扣手续费和滑点，没有和“随便挑一天”对照，样本也很少：只能说明这种情况多久出现一次，不能说明它管不管用。四证的回测结论见图表页的「模型」页签。</p>
+  <table id="tSum" aria-label="历史触发汇总"></table>
+</div>
+<div id="toast" hidden></div>
+<script src="/static/terminal.js"></script>
+</body>
+</html>
