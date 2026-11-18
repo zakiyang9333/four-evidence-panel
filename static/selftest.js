@@ -79,6 +79,73 @@
     $('#clearBtn').click();
     ok('clear_all', S.drawings.length === 0);
 
+    // 左边工具栏照录屏：四组弹出菜单 + 画笔、文字、表情、尺子、放大、磁铁、锁定、隐藏、同步、删除、收藏
+    {
+      const d0 = S.bars.d[S.asof];
+      const T = window.FEDraw, items = [...document.querySelectorAll('#tools .tb-item[data-tool]')].map(x => x.dataset.tool);
+      const need = ['trend', 'ray', 'info', 'ext', 'angle', 'hline', 'hray', 'vline', 'cross', 'parallel', 'regression', 'flat', 'disjoint', 'pitchfork', 'schiff', 'modschiff', 'inside',
+        'fibret', 'fibext', 'fibch', 'fibtime', 'fan', 'fibtt', 'fibcircle', 'fibspiral', 'fibarc', 'fibwedge', 'pitchfan', 'gannbox', 'gannfix', 'gannsq', 'gannfan',
+        'xabcd', 'cypher', 'hs', 'abcd', 'tripat', 'drives', 'ew5', 'ewabc', 'ewtri', 'ewwxy', 'ewwxyxz', 'cycle', 'tcycle', 'sine',
+        'long', 'short', 'forecast', 'bars', 'ghost', 'sector', 'avwap', 'vp', 'avp', 'prange', 'drange', 'dprange', 'text', 'arrow'];
+      ok('toolbar_has_video_tools', need.every(k => items.indexOf(k) >= 0) && ['brush', 'ruler', 'zoom'].every(k => $('#tools [data-tool=' + k + ']')) &&
+        ['#tbMagnet', '#tbLock', '#tbHide', '#tbSync', '#delBtn', '#tbFav'].every(s => $(s)), need.filter(k => items.indexOf(k) < 0));
+      $('#tools [data-open=lines]').click();
+      const menu = $('.tb-menu[data-menu=lines]');
+      ok('toolbar_menu_opens', !menu.hidden && menu.getBoundingClientRect().left >= $('#tools').getBoundingClientRect().right - 1 && /通道/.test(menu.textContent) && /分叉线/.test(menu.textContent));
+      // 每一个有点数的工具都真的能画出来（点够点数 → 存一条、回到光标、画布上有颜色）
+      const base = S.asof - 60, pr = i => S.bars.c[Math.max(0, Math.min(S.asof, i))];
+      const bad = [];
+      for (const k of need.filter(k => T.has(k))) {
+        const n = T.tools[k].n, before = S.drawings.length;
+        document.querySelector('#tools .tb-item[data-tool=' + k + ']').click();
+        if (k === 'text') { click(base, pr(base)); $('#textInput').value = '字'; $('#textBox').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); }
+        else for (let m = 0; m < n; m++) { const i = base + m * 8; click(i, pr(i) * (m % 2 ? 1.04 : 0.97)); }
+        if (S.drawings.length !== before + 1 || S.tool !== 'cursor' || S.drawings[before].type !== k) bad.push(k);
+      }
+      await frame();
+      ok('every_tool_draws', bad.length === 0, bad);
+      ok('main_button_follows_last_pick', $('.tb-main[data-main=measure]').dataset.tool === 'dprange' && $('.tb-main[data-main=patterns]').dataset.tool === 'sine');
+      ok('new_drawings_saved', JSON.parse(localStorage.getItem('fe.draw.' + S.ticker) || '[]').length === S.drawings.length);
+      // 选中：点在趋势线中间
+      $('#clearBtn').click();
+      $('#tools .tb-item[data-tool=trend]').click(); click(base, pr(base)); click(base + 20, pr(base) * 1.05); await frame();
+      const mid = [base + 10, pr(base) * 1.025], hitK = () => { const r = ov.getBoundingClientRect(), e = evt(mid[0], mid[1]); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+      S.selected = -1; const hp = hitK();
+      ok('trend_selectable', window.FEDraw.hit(0, hp.x, hp.y));
+      // 锁定：选不中、删不掉；隐藏：画布上没了
+      $('#tbLock').click(); S.selected = 0; $('#delBtn').click();
+      ok('lock_blocks_delete', S.drawings.length === 1 && $('#tbLock').classList.contains('on'));
+      $('#tbLock').click(); S.selected = -1;
+      const lit0 = alphaAt(mid[0], mid[1]); $('#tbHide').click(); await frame(); const lit1 = alphaAt(mid[0], mid[1]); $('#tbHide').click(); await frame();
+      ok('hide_toggle', lit0 > 0 && lit1 === 0 && alphaAt(mid[0], mid[1]) > 0, [lit0, lit1]);
+      // 磁铁：点在 K 线附近，吸到最高价
+      $('#tbMagnet').click(); $('#tools [data-tool=hray]').click();
+      const mi = S.asof - 5; click(mi, S.bars.h[mi] * 1.001);
+      ok('magnet_snaps', S.drawings[1] && S.drawings[1].pts[0].p === S.bars.h[mi], S.drawings[1] && S.drawings[1].pts[0]);
+      $('#tbMagnet').click();
+      // 收藏：菜单里点 ☆ → 底部收藏栏出现这个工具
+      $('#tools .tb-fav[data-fav=fibret]').click(); $('#tbFav').click();
+      ok('favorite_bar', !$('#favBar').hidden && !!$('#favBar [data-tool=fibret]'));
+      $('#tbFav').click();
+      // 放大：框住 20 根 → 让图表只显示这一段（图表库在下一帧才换视野，无头模式下那一帧不跑，所以这里查发给图表库的请求）
+      const tsz = ch.timeScale(), oz = tsz.setVisibleLogicalRange.bind(tsz); let zreq = null; tsz.setVisibleLogicalRange = r => { zreq = r; return oz(r); };
+      $('#tools [data-tool=zoom]').click(); click(base, pr(base)); click(base + 20, pr(base + 20)); delete tsz.setVisibleLogicalRange;
+      ok('zoom_box', zreq && zreq.to - zreq.from < 40 && zreq.from <= base && zreq.to >= base + 20 && S.tool === 'cursor', zreq);
+      // 画笔：按住拖动
+      $('#tools [data-tool=brush]').click();
+      const md = (t, i, p) => (t === 'mouseup' ? window : ov).dispatchEvent(new MouseEvent(t, evt(i, p)));
+      md('mousedown', base, pr(base)); for (let m = 1; m <= 6; m++) md('mousemove', base + m * 2, pr(base) * (1 + m * 0.01)); md('mouseup', base + 12, pr(base) * 1.06);
+      ok('brush_draws', S.drawings.some(d => d.type === 'brush' && d.pts.length >= 5));
+      // 尺子：量完不存
+      const n0 = S.drawings.length; $('#tools [data-tool=ruler]').click(); click(base, pr(base)); click(base + 10, pr(base) * 1.1);
+      ok('ruler_not_saved', S.drawings.length === n0 && S.tool === 'cursor');
+      // 同步：日线画的线到周线也在
+      $('#tbSync').click(); document.querySelector('#tfSeg [data-tf=W]').click(); await until(() => S.tf === 'W' && S.bars.tf === 'W' && fresh()); await frame();
+      ok('sync_daily_weekly', S.tf === 'W' && S.drawings.length === n0, S.drawings.length);
+      document.querySelector('#tfSeg [data-tf=D]').click(); await until(() => S.tf === 'D' && S.bars.tf === 'D' && fresh()); $('#tbSync').click(); await frame();
+      $('#clearBtn').click(); await replayTo(d0);       // 周线来回一趟会把回放日落到周末，拨回原来那天
+    }
+
     // 指标开关
     const panes0 = ch.panes().length; const macd = document.querySelector('[data-ind=macd]'); macd.click(); await frame();
     const panes1 = ch.panes().length; macd.click(); await frame();
@@ -396,28 +463,19 @@
       $('#modalClose').click();
       await pick('SPCX');
     }
-    // AI 对话（一键解释并在里面）：点一下出大白话解释，作为一条消息留在对话里；对话存档、能新建、能翻历史
+    // AI 对话：一键解释的入口已经拿掉（zaki 2026-11-17：有 AI 对答就够了）；旧对话里的解释卡片还能照常显示
     {
       const CF = window.FEChat, QF = window.FEQuant;
       ok('chat_closed_by_default', $('#learn').hidden && !CF.isOpen());
-      $('#learnBtn').click(); await until(() => CF.conv() && CF.conv().messages.length === 1 && document.querySelector('#learn .lcard'), 8000);
+      ok('explain_entry_removed', !$('#learnBtn') && !$('#chatExplain'));
+      $('#chatBtn').click(); await until(() => !$('#learn').hidden, 4000);
+      ok('chat_button_opens_chat', CF.isOpen() && !!$('#learn .chat-empty'));
+      CF.explain(); await until(() => CF.conv() && CF.conv().messages.length === 1 && document.querySelector('#learn .lcard'), 8000);
       const cv = CF.conv(), lp = cv.messages[0].learn, cards = [...document.querySelectorAll('#learn .lcard')];
-      ok('explain_lands_in_chat_as_cards', !$('#learn').hidden && cv.messages[0].kind === 'explain' && cards.length === lp.cards.length && cards.length >= 12 && !!$('#learn .learn-hl b').textContent &&
-        cards.every(a => a.querySelector('h4').textContent.length > 3 && a.querySelector('p').textContent.length > 20) && /没花钱/.test($('#learn .cx-chip').textContent), cards.length);
-      ok('explain_says_today', document.querySelectorAll('#learn .lnow').length >= 8 && new RegExp(S.state.asof).test($('#learn').textContent));
+      ok('old_explain_cards_still_render', !$('#learn').hidden && cv.messages[0].kind === 'explain' && cards.length === lp.cards.length && cards.length >= 12, cards.length);
       ok('chat_chart_still_there', candle.data().length === S.bars.d.length && $('#chart').getBoundingClientRect().width > 300, $('#chart').getBoundingClientRect().width);
-      document.querySelector('#learn .lcard[data-id=banner] .lspot').click();
-      ok('explain_points_at_things', $('#banner').classList.contains('learn-spot'));
-      document.querySelector('#learn .lcard[data-id=e1] .lspot').click(); await frame();
-      ok('explain_points_at_evidence', $('#evidence').classList.contains('learn-spot') && S.flash && S.flash.k === 0, S.flash && S.flash.k);
-      ok('explain_no_advice', !/建议买|建议卖|可以买入|赶紧/.test($('#learn').textContent) && /不告诉你该买还是该卖/.test($('#learn').textContent));
-      // 换一只票再点一次：新的解释接在同一段对话后面，前一条不动
-      await pick('QQQ'); $('#chatExplain').click();
-      await until(() => CF.conv() && CF.conv().messages.length === 2, 8000);
-      const chips = [...document.querySelectorAll('#learn .cx-chip')].map(x => x.textContent);
-      ok('explain_appends_not_rewrites', chips.length === 2 && /SPCX|NVDA/.test(chips[0]) && /QQQ/.test(chips[1]) && CF.conv().id === cv.id, chips);
-      // 提问：没有密钥时输入框关着并说明原因；有密钥时能打字（真正的问答在后端测试里对着假服务跑）
-      ok('chat_input_matches_key', $('#chatInput').disabled === !S.meta.ai.enabled && (S.meta.ai.enabled || /没有设置 API 密钥/.test($('#chatInput').placeholder)) && !$('#chatExplain').disabled, $('#chatInput').placeholder);
+      ok('explain_no_advice', !/建议买|建议卖|可以买入|赶紧/.test($('#learn').textContent));
+      ok('chat_input_matches_key', $('#chatInput').disabled === !S.meta.ai.enabled && (S.meta.ai.enabled || /没有设置 API 密钥/.test($('#chatInput').placeholder)), $('#chatInput').placeholder);
       // Markdown 只建节点：加粗、列表、表格、链接；脚本标签当普通文字
       const fr = document.createElement('div'); fr.appendChild(CF.md('**结论**：先等\n\n- 第一条\n- 第二条\n\n| 项 | 值 |\n|---|---|\n| 止损 | 144.34 |\n\n<script>window.__x=1</script> [出处](https://example.com/a)'));
       ok('chat_markdown_is_safe', !!fr.querySelector('strong') && fr.querySelectorAll('li').length === 2 && fr.querySelectorAll('td').length === 2 && !fr.querySelector('script') && window.__x === undefined &&
@@ -428,8 +486,8 @@
       $('#chatNewBtn').click(); await frame();
       ok('chat_new_is_empty', !CF.conv() && !!$('#learn .chat-empty') && !$('#chatForm').hidden);
       $('#chatHistBtn').click(); await until(() => document.querySelector('#learn .chat-item .open'), 6000);
-      document.querySelector('#learn .chat-item .open').click(); await until(() => CF.conv() && CF.conv().id === cv.id && document.querySelectorAll('#learn .cx-chip').length === 2, 6000);
-      ok('chat_reopens_with_memory', CF.conv().messages.length === 2 && document.querySelectorAll('#learn .lcard').length >= 24);
+      document.querySelector('#learn .chat-item .open').click(); await until(() => CF.conv() && CF.conv().id === cv.id && document.querySelectorAll('#learn .lcard').length >= 12, 6000);
+      ok('chat_reopens_with_memory', CF.conv().messages.length === 1 && document.querySelectorAll('#learn .lcard').length >= 12);
       $('#chatClose').click();
       ok('chat_closes', $('#learn').hidden && !CF.isOpen());
       // 切换模型不清空 AI 解读：另一个模型下分析过的那一份留在原处

@@ -110,11 +110,14 @@ class Store(unittest.TestCase):
         self.assertEqual(got, {'PPI +6.5% YoY: Highest in Nearly 4 Years': 'PPI 同比上涨 6.5%，近 4 年最高', 'Nvidia Rebounds After Huang Exit as Treasury Yields Top 5%': None})
         self.assertEqual((p['freshness']['headlines_zh'], p['freshness']['untranslated']), (1, 0))   # 翻失败的那条不反复重试
         self.assertEqual(notes.pending_translation('NVDA'), [])
-        late = [dict(date='2026-11-16', title='News after the last bar', source='X', url='https://example.com/late')]
+        import datetime
+        with open(panel.csv_path('NVDA')) as f: last_bar = f.read().strip().splitlines()[-1].split(',')[0]
+        after = (datetime.date.fromisoformat(last_bar) + datetime.timedelta(days=1)).isoformat()     # 从数据里推，不写死日期（数据每天会往后长）
+        late = [dict(date=after, title='News after the last bar', source='X', url='https://example.com/late')]
         notes.refresh('NVDA', events=lambda t: EVENTS, headlines=lambda t: late, now=NOW)
         p2 = notes.payload('NVDA', now=NOW)
         self.assertEqual([r['title'] for r in p2['pending']], ['News after the last bar'])       # 最后一根 K 线之后的消息：单独列出，不丢
-        self.assertNotIn('2026-11-16', p2['by_date']); self.assertEqual(p2['freshness']['untranslated'], 1)
+        self.assertNotIn(after, p2['by_date']); self.assertEqual(p2['freshness']['untranslated'], 1)
         self.assertEqual(notes.payload('NVDA', '2026-11-12', now=NOW)['pending'], [])            # 回放时不给
         notes.delete('NVDA', notes.pending_translation('NVDA')[0]['id'])
         self.assertIn('PPI 同比上涨 6.5%，近 4 年最高', [n['text'] for n in notes.for_ai('NVDA', None)['notes']])   # 交给 AI 的也是中文

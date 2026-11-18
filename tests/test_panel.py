@@ -110,7 +110,7 @@ class Acceptance(unittest.TestCase):
         dif, dea, hist = E.macd(E.load(panel.csv_path('NVDA'))['c'])
         self.assertTrue(close(b['hist'][-1], hist[-1]) and close(hist[-1], 2 * (dif[-1] - dea[-1])))   # 柱 = 2×(DIF−DEA)
         self.assertTrue(close(b['vma5'][-1], sum(b['v'][-5:]) / 5, 1e-4))
-        self.assertTrue(all('single' in v for v in b['src'].values()))
+        self.assertTrue(b['src'] and all(v and v != 'project' for v in b['src'].values()))      # 只列出不是项目数据的行，并写明来源（单一来源或几家核对过）
         json.dumps(b, allow_nan=False)
 
 
@@ -196,11 +196,14 @@ class RefreshAppendOnly(unittest.TestCase):
         self.assertEqual(rep['appended'], []); self.assertEqual(self.stored(), self.kept)
 
     def test_existing_single_rows_get_a_side_check_not_an_edit(self):
+        lines = self.full.splitlines(keepends=True)
+        k = max(n for n, ln in enumerate(lines) if '(single)' in ln)     # 存到最后一条单一来源的行为止（之后的数据更新会追加多来源的行）
+        upto = ''.join(lines[:k + 1])
         with open(os.path.join(self.tmp, 'NVDA.csv'), 'w', newline='') as f:
-            f.write(self.full)                                   # last stored row is yennanliu(single)
-        last = self.new[2]
+            f.write(upto)                                        # last stored row is yennanliu(single)
+        last = lines[k].split(',')[0]
         rep = prep_data.update_ticker('NVDA', [('yahoo', self.src())], self.late)
-        self.assertEqual(rep['appended'], []); self.assertEqual(self.stored(), self.full)
+        self.assertEqual(self.stored()[:len(upto)], upto)        # 已有的行一个字都不改
         self.assertTrue(rep['crosscheck'][last]['ok']); self.assertEqual(rep['crosscheck'][last]['source'], 'yahoo')
 
 

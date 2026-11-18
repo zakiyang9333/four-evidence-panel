@@ -75,8 +75,6 @@ window.FEChat = (() => {
     head.appendChild(hb); head.appendChild(nb); head.appendChild(xb);
     const body = el('div', 'chat-body'); body.id = 'chatBody';
     const quick = el('div', 'chat-quick'); quick.id = 'chatQuick';
-    const ex = el('button', 'q-explain', '一键解释（不花钱）'); ex.id = 'chatExplain'; ex.title = '用大白话把现在屏幕上的每样东西讲一遍。程序拼的，不调用 AI'; ex.onclick = explain;
-    quick.appendChild(ex);
     QUICK.forEach(q => { const b = el('button', '', q); b.onclick = () => send(q); quick.appendChild(b); });
     const form = el('form', 'chat-form'); form.id = 'chatForm';
     const ta = el('textarea'); ta.id = 'chatInput'; ta.rows = 2; ta.maxLength = 4000; ta.placeholder = '问点什么。回车发送，Shift + 回车换行';
@@ -90,12 +88,10 @@ window.FEChat = (() => {
     form.addEventListener('submit', e => { e.preventDefault(); if (streaming) stop(); else { const t = ta.value; if (t.trim()) { ta.value = ''; send(t); } } });
     ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
     box.appendChild(head); box.appendChild(body); box.appendChild(quick); box.appendChild(form);
-    $('#learnBtn').onclick = async () => { await toggle(true); explain(); };
     $('#chatBtn').onclick = () => toggle(!open);
     const q = new URLSearchParams(location.search);
     if (q.get('chatid')) c.store.set('chat.id', q.get('chatid'));       // ?chatid=…：直接打开某一段对话
     if (q.get('chat') === '1') toggle(true);
-    if (q.get('learn') === '1') { const go = () => { if (c.stateFresh()) explain(); else setTimeout(go, 120); }; toggle(true).then(go); }
   }
 
   /* 对话住在「AI 量化」窗口的「对话」页签里。打开 = 展开窗口并切到这一页；收起 = 回到「分析」页。 */
@@ -135,10 +131,9 @@ window.FEChat = (() => {
     $('#chatSend').textContent = streaming ? '停止' : '发送';
     $('#chatSend').classList.toggle('stop', streaming);
     $('#chatInput').disabled = !ok; $('#chatSend').disabled = !ok && !streaming;
-    $('#chatInput').placeholder = ok ? '问点什么。回车发送，Shift + 回车换行' : '没有设置 API 密钥，不能提问；“一键解释”照常可用';
+    $('#chatInput').placeholder = ok ? '问点什么。回车发送，Shift + 回车换行' : '没有设置 API 密钥，不能提问';
     $('#chatQuick').hidden = view === 'list'; $('#chatForm').hidden = view === 'list';
-    [...$('#chatQuick').querySelectorAll('button:not(.q-explain)')].forEach(b => { b.disabled = !ok || streaming; });
-    $('#chatExplain').disabled = streaming || !c.stateFresh();
+    [...$('#chatQuick').querySelectorAll('button')].forEach(b => { b.disabled = !ok || streaming; });
     const u = conv && conv.usage;
     $('#chatUsage').textContent = u && u.calls ? '这段对话共 ' + kilo(u.tokens_in + u.cache_read + (u.cache_write || 0)) + ' 入（其中 ' + kilo(u.cache_read) + ' 走缓存）+ ' + kilo(u.tokens_out) + ' 出' : '';
     $('#chatUsage').title = '入 = 发给模型的内容（图表数据和前面的对话），出 = 它写的回答。走缓存的那部分只按原价的很小一部分计费。';
@@ -207,7 +202,7 @@ window.FEChat = (() => {
       e.appendChild(el('b', '', '看图的时候，有什么想问的就问'));
       e.appendChild(el('p', '', '它看得到现在这张图：规则引擎的结论、最近 60 根 K 线、表盘、清单、K 线上的备注和当天保存的 AI 解读。换了标的或日期，它会自动拿到新的一份。'));
       e.appendChild(el('p', '', '整段对话有记忆，存在本机，关掉再开还能接着聊。提问会调用 Claude（计费）；前面聊过的内容会走缓存，越往后每一问越便宜。'));
-      e.appendChild(el('p', '', '不知道从哪问起，就先点下面的“一键解释”，它不花钱。'));
+      e.appendChild(el('p', '', '不知道从哪问起，就点下面的几个常见问题。'));
       body.appendChild(e);
     } else conv.messages.forEach(m => body.appendChild(msgNode(m)));
     sync();

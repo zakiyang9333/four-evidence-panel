@@ -342,7 +342,7 @@ window.FEQuant = (() => {
       }
       Q.shown = 1e9;
       step(2, { state: 'done', ms: performance.now() - t3 });
-      if (Q.autoScroll) $('#sigCard').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      if (Q.autoScroll) $('#narrCard').scrollIntoView({ block: 'start', behavior: 'smooth' });     // 第四步的解说动画要看得见
       const t4 = performance.now();
       Q.steps[3].note = '模板或保存过的解读，不计费'; stepsCard();
       await c.narr.run();

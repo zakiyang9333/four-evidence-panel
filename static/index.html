@@ -44,25 +44,13 @@
   <span id="dataDate" class="chip chart-only" title="只有收盘后的日线，没有实时行情"></span>
   <button id="dataWarn" class="chip warn chart-only" hidden></button>
   <button id="refreshBtn" class="chart-only" title="运行 prep_data.py，只追加新日期">刷新数据</button>
-  <button id="learnBtn" class="chart-only" title="看不懂？点一下，用大白话把现在屏幕上的每样东西讲一遍。程序拼的，不花钱；解释出现在「AI 量化」窗口的对话页里，可以接着问">？一键解释</button>
   <button id="chatBtn" class="chart-only" title="一边看图一边问。有记忆，对话存在本机。打开「AI 量化」窗口的对话页">AI 对话</button>
   <button id="aiBtn" class="primary chart-only" title="打开或收起「AI 量化」窗口">✦ AI 量化</button>
 </header>
 
 <div id="views">
 <main id="main">
-  <nav id="tools" aria-label="画线工具">
-    <button data-tool="cursor" title="光标：拖动、缩放、十字线（Esc）"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg><span>光标</span></button>
-    <button id="autoBtn" title="自动画：按引擎的高点、低点、地量日画出扇子、成本线、止损线"><svg viewBox="0 0 24 24"><path d="M4 5l16 5M4 5l16 9M4 5l16 13"/><circle cx="4" cy="5" r="1.6"/></svg><span>自动画</span></button>
-    <hr>
-    <button data-tool="fan" title="斐波那契速度阻力扇 0.382 / 0.5 / 0.618：先点高点，再点低点"><svg viewBox="0 0 24 24"><path d="M4 5l16 4M4 5l16 9M4 5l15 14"/></svg><span>扇形</span></button>
-    <button data-tool="avwap" title="锚定 VWAP：点一根 K 线作为起算日"><svg viewBox="0 0 24 24"><path d="M3 15c4-1 5-6 9-6s5 3 9 2"/><circle cx="6" cy="14" r="1.8"/></svg><span>锚定VWAP</span></button>
-    <button data-tool="hline" title="水平线：点一个价位"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><circle cx="12" cy="12" r="1.8"/></svg><span>水平线</span></button>
-    <button data-tool="arrow" title="箭头加文字：先点起点，再点箭头指向的位置"><svg viewBox="0 0 24 24"><path d="M5 19L18 6M18 6h-7M18 6v7"/></svg><span>箭头文字</span></button>
-    <hr>
-    <button id="delBtn" title="删除选中的手动画线（先在光标模式下点一下那条线，或按 Delete）"><svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></svg><span>删除</span></button>
-    <button id="clearBtn" title="清空这只标的的全部手动画线"><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19"/></svg><span>清空</span></button>
-  </nav>
+  <nav id="tools" aria-label="画线工具"><!-- 按钮由 static/draw.js 照录屏的排法生成 --></nav>
 
   <section id="stage">
     <div id="chartwrap">
@@ -146,13 +134,6 @@
         <div id="qScore"><div class="muted small">计算中…</div></div>
       </div>
 
-      <div class="sec-title">◎ 规则模型信号 <span class="muted small" id="qWeekNote"></span></div>
-      <div id="sigCard" class="card"></div>
-      <div id="tiles" class="tiles"></div>
-      <div id="qPosNote" class="card thin posnote" hidden></div>
-      <div id="qExtra"></div>
-      <div id="narrWatch" class="card thin" hidden></div>
-
       <div class="sec-title">✦ AI 深度解读 <span class="qtag" id="narrSrc" hidden></span><span class="muted small" id="narrMeta"></span></div>
       <div class="card narr" id="narrCard">
         <div class="narr-actions">
@@ -165,6 +146,13 @@
         <div id="narr" hidden></div>
         <details id="narrHist"><summary>解读存档（按天保存，点一行回到那一天）</summary><div class="nh-list"></div></details>
       </div>
+
+      <div class="sec-title">◎ 规则模型信号 <span class="muted small" id="qWeekNote"></span></div>
+      <div id="sigCard" class="card"></div>
+      <div id="tiles" class="tiles"></div>
+      <div id="qPosNote" class="card thin posnote" hidden></div>
+      <div id="qExtra"></div>
+      <div id="narrWatch" class="card thin" hidden></div>
 
       <div class="sec-title">⏱ 时效与备注 <span class="muted small">每样信息有多新，那几天发生过什么</span></div>
       <div class="card thin" id="noteCard"></div>
@@ -211,6 +199,7 @@
 <script src="/static/quant.js"></script>
 <script src="/static/chat.js"></script>
 <script src="/static/notes.js"></script>
+<script src="/static/draw.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

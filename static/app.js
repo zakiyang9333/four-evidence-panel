@@ -464,6 +464,8 @@ function drawMarks() {
 }
 
 function visible(d) {     // 回放时，锚点在回放日之后的手动画线先藏起来
+  if (S.dt && S.dt.hide) return false;                 // 工具栏的“隐藏”开着
+  if (window.FEDraw.has(d.type)) return window.FEDraw.visible(d);
   if (d.type === 'hline') return true;
   if (d.type === 'avwap') return d.i <= S.asof;
   return d.a.i <= S.asof;
@@ -479,7 +481,8 @@ function drawManual() {
   S.drawings.forEach((d, k) => {
     if (!visible(d)) return;
     const sel = k === S.selected, col = sel ? '#ffffff' : '#7dd3fc';
-    if (d.type === 'hline') drawHLine(0, d.p, col, fmtP(d.p));
+    if (window.FEDraw.has(d.type)) window.FEDraw.render(d, k, sel);
+    else if (d.type === 'hline') drawHLine(0, d.p, col, fmtP(d.p));
     else if (d.type === 'fan') drawFan(d.a.i, d.a.p, d.b.i, d.b.p, { color: col, selected: sel });
     else if (d.type === 'arrow') drawArrow(d.a, d.b, d.text, sel ? '#ffffff' : '#fde047', sel);
     else if (d.type === 'avwap') {
@@ -491,9 +494,11 @@ function drawManual() {
       if (xl != null && yl != null) label('VWAP ' + fmtP(s.values[s.values.length - 1]) + '（' + d.d.slice(5) + ' 起）', xl + 8, yl - 12, '#f0abfc');
     }
   });
+  window.FEDraw.drawRuler();
 }
 function drawPending() {
   const p = S.pending, c = S.cur;
+  if (window.FEDraw.has(S.tool)) { window.FEDraw.preview(); return; }
   if (S.tool === 'cursor' || !c) return;
   ctx.globalAlpha = 0.85;
   if (S.tool === 'hline') drawHLine(0, c.p, '#7dd3fc', fmtP(c.p), [4, 4]);
@@ -539,31 +544,40 @@ function snap(pt) {      // 吸附到这根 K 线的最高或最低价（14px �
 }
 const HINTS = { fan: ['扇形：先点高点', '扇形：再点低点（在高点右边）'], avwap: ['锚定 VWAP：点一根 K 线作为起算日'], hline: ['水平线：点一个价位'], arrow: ['箭头：先点起点（文字写在这里）', '箭头：再点要指向的位置'] };
 function setTool(t) {
+  if (t === 'avwap' && !isDaily()) { toast('周线上不画锚定 VWAP（成本线按日线算），切回日线再用。'); t = 'cursor'; }
   S.tool = t; S.pending = null; S.cur = null; $('#textBox').hidden = true;
-  $$('#tools [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  window.FEDraw.sync(t);
   ov.classList.toggle('draw', t !== 'cursor');
   updateHint(); S.rev++;
 }
 function updateHint() {
   const h = $('#hint');
   if (S.tool === 'cursor') { h.hidden = true; return; }
-  h.textContent = HINTS[S.tool][S.pending ? 1 : 0] + ' · Esc 取消'; h.hidden = false;
+  const txt = HINTS[S.tool] ? HINTS[S.tool][S.pending ? 1 : 0] : window.FEDraw.hint();
+  h.textContent = txt + ' · Esc 取消'; h.hidden = false;
 }
-const drawKey = () => 'draw.' + S.ticker + (isDaily() ? '' : '.W');
+// 日线、周线各存一套手动画线；工具栏的“同步”打开后共用日线那一套（点按日期对回 K 线）
+const drawKey = () => 'draw.' + S.ticker + (isDaily() || (S.dt && S.dt.sync) ? '' : '.W');
 function saveDrawings() { store.set(drawKey(), S.drawings); }
 function loadDrawings() {
   const arr = store.get(drawKey(), []);
-  const fix = pt => { if (pt && pt.d && S.idx[pt.d] != null) pt.i = S.idx[pt.d]; return pt; };
+  const fix = pt => { if (pt && pt.d) pt.i = S.idx[pt.d] != null ? S.idx[pt.d] : indexAt(pt.d); return pt; };
   S.drawings = (Array.isArray(arr) ? arr : []).filter(d => d && d.type).map(d => {
-    if (d.type === 'avwap') fix(d); else if (d.a) { fix(d.a); fix(d.b); }
+    if (d.type === 'avwap') fix(d); else if (d.pts) d.pts.forEach(fix); else if (d.a) { fix(d.a); fix(d.b); }
     return d;
   });
   S.selected = -1;
 }
 function addDrawing(d) { S.drawings.push(d); saveDrawings(); S.selected = S.drawings.length - 1; setTool('cursor'); }
+function askText(pt) {
+  const box = $('#textBox'), inp = $('#textInput');
+  box.style.left = clamp(pt.x - 40, 4, OV.w - 200) + 'px'; box.style.top = clamp(pt.y + 12, 4, OV.h - 34) + 'px';
+  inp.value = ''; box.hidden = false; inp.focus();
+}
 function onDrawClick(e) {
   const pt = ptFromEvent(e);
   if (pt.p == null) return;
+  if (window.FEDraw.has(S.tool)) return window.FEDraw.click(pt);
   if (S.tool === 'hline') return addDrawing({ type: 'hline', p: pt.p });
   if (S.tool === 'avwap') { const s = snap(pt); return addDrawing({ type: 'avwap', i: s.i, d: s.d }); }
   if (S.tool === 'fan') {
@@ -577,9 +591,7 @@ function onDrawClick(e) {
     if (!S.pending) { S.pending = { a: q }; updateHint(); S.rev++; return; }
     if (S.pending.b) return;
     S.pending.b = q;
-    const box = $('#textBox'), inp = $('#textInput');
-    box.style.left = clamp(pt.x - 40, 4, OV.w - 200) + 'px'; box.style.top = clamp(pt.y + 12, 4, OV.h - 34) + 'px';
-    inp.value = ''; box.hidden = false; inp.focus();
+    askText(pt);
   }
 }
 function segDist(px, py, x0, y0, x1, y1) {
@@ -588,9 +600,11 @@ function segDist(px, py, x0, y0, x1, y1) {
   return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
 }
 function hitTest(x, y) {
+  if (S.dt && S.dt.lock) return -1;                    // 锁定：画好的线点不中
   for (let k = S.drawings.length - 1; k >= 0; k--) {
     const d = S.drawings[k]; if (!visible(d)) continue;
-    if (d.type === 'hline') { const yy = Y(d.p); if (yy != null && Math.abs(y - yy) < 6) return k; }
+    if (window.FEDraw.has(d.type)) { if (window.FEDraw.hit(k, x, y)) return k; }
+    else if (d.type === 'hline') { const yy = Y(d.p); if (yy != null && Math.abs(y - yy) < 6) return k; }
     else if (d.type === 'arrow') { const v = [X(d.a.i), Y(d.a.p), X(d.b.i), Y(d.b.p)]; if (v.every(q => q != null) && segDist(x, y, v[0], v[1], v[2], v[3]) < 7) return k; }
     else if (d.type === 'fan') {
       const x0 = X(d.a.i), y0 = Y(d.a.p), x1 = X(d.b.i); if (x0 == null || y0 == null || x1 == null || x1 <= x0) continue;
@@ -604,8 +618,20 @@ function hitTest(x, y) {
   return -1;
 }
 function deleteSelected() {
+  if (S.dt && S.dt.lock) return toast('画线锁着。先点工具栏的“锁定”解开，再删。');
   if (S.selected < 0) return toast('先在光标模式下点一下要删的手动画线。');
   S.drawings.splice(S.selected, 1); S.selected = -1; saveDrawings(); S.rev++;
+}
+function clearAll() {
+  if (S.dt && S.dt.lock) return toast('画线锁着。先点工具栏的“锁定”解开，再删。');
+  if (!S.drawings.length) return toast('没有手动画线。');
+  S.drawings = []; S.selected = -1; saveDrawings(); S.rev++; toast('已清空 ' + S.ticker + ' 的手动画线。');
+}
+function zoomTo(lo, hi) {      // “放大”工具：把框住的那一段铺满图表
+  const pad = Math.max(2, Math.round((hi - lo) * 0.05));
+  S.needFocus = false;          // 换标的、换周期后还没执行的“回到默认视野”不能再把放大冲掉
+  chart.timeScale().setVisibleLogicalRange({ from: lo - pad, to: hi + pad });
+  noteSpan();
 }
 
 // ---------- state ----------
@@ -724,7 +750,7 @@ function renderTop() {
   dd.title = '只有收盘后的日线，没有实时行情。' + (lrf ? '上次刷新 ' + String(lrf.at).replace('T', ' ').slice(0, 16) + '（' + (lrf.trigger === 'schedule' ? '定时任务' : '手动') + '）' + (lrf.has_error ? '，有错误' : '') : '还没有刷新记录') +
     (fr && !fr.calendar_known ? '。交易日历只录到 2027 年，之后按工作日估算。' : '');
   $$('#tfSeg [data-tf]').forEach(b => b.classList.toggle('on', b.dataset.tf === S.tf));
-  const avBtn = $('[data-tool=avwap]'); avBtn.disabled = !isDaily(); avBtn.title = isDaily() ? '锚定 VWAP：点一根 K 线作为起算日' : '周线上不画锚定 VWAP（成本线按日线算），切回日线再用';
+  $$('#tools [data-tool=avwap]').forEach(avBtn => { avBtn.disabled = !isDaily(); avBtn.title = isDaily() ? '锚定 VWAP：点一根 K 线作为起算日' : '周线上不画锚定 VWAP（成本线按日线算），切回日线再用'; });
   $('#autoBtn').disabled = !isDaily(); $('#autoBtn').title = isDaily() ? '自动画：按引擎的高点、低点、地量日画出扇子、成本线、止损线' : '周线上不自动画：四要素只按日线判定，切回日线再看';
   const srcN = Object.keys(S.bars.src).length, w = $('#dataWarn'), lr = S.meta && S.meta.last_refresh;
   if (lr && lr.has_error) { w.hidden = false; w.className = 'chip err'; w.textContent = '数据刷新有错误'; w.onclick = () => showRefresh(lr); }
@@ -1087,14 +1113,18 @@ function bind() {
   ov.addEventListener('mousemove', e => { if (S.tool !== 'cursor') { S.cur = ptFromEvent(e); S.rev++; } });
   ov.addEventListener('mouseleave', () => { S.cur = null; S.rev++; });
   ov.addEventListener('click', onDrawClick);
-  $$('#tools [data-tool]').forEach(b => { b.onclick = () => setTool(b.dataset.tool === S.tool ? 'cursor' : b.dataset.tool); });
+  window.FEDraw.init({       // 左边工具栏：按钮、弹出菜单、新画线工具都在 draw.js
+    S, store, X, Y, g: () => ctx, OV: () => OV, label, rgba, fmtP, toast, setTool, updateHint, addDrawing, deleteSelected, clearAll, zoomTo, askText, ptFromEvent,
+    redraw: () => { S.rev++; }, reloadDrawings: () => { loadDrawings(); S.rev++; },
+  });
   $('#autoBtn').onclick = () => { S.auto = !S.auto; store.set('auto', S.auto); renderTop(); syncPriceLines(); candle.applyOptions({ autoscaleInfoProvider: scaleProvider }); S.rev++; };
-  $('#delBtn').onclick = deleteSelected;
-  $('#clearBtn').onclick = () => { if (!S.drawings.length) return toast('没有手动画线。'); S.drawings = []; S.selected = -1; saveDrawings(); S.rev++; toast('已清空 ' + S.ticker + ' 的手动画线。'); };
   $('#textBox').addEventListener('submit', e => {
     e.preventDefault();
-    if (S.pending && S.pending.b) addDrawing({ type: 'arrow', a: S.pending.a, b: S.pending.b, text: $('#textInput').value.trim() });
+    const v = $('#textInput').value.trim();
+    if (S.pending && S.pending.textFor) window.FEDraw.finishText(v);
+    else if (S.pending && S.pending.b) addDrawing({ type: 'arrow', a: S.pending.a, b: S.pending.b, text: v });
     $('#textBox').hidden = true;
+    if (S.tool !== 'cursor') setTool('cursor');
   });
   $('#indBtn').onclick = e => { e.stopPropagation(); $('#indPop').hidden = !$('#indPop').hidden; };
   document.addEventListener('click', e => { if (!e.target.closest('#indMenu')) $('#indPop').hidden = true; });
