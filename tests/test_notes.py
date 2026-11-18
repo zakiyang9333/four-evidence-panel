@@ -3,16 +3,23 @@
 备注目录是临时目录，不碰 data/notes；不连 Yahoo，不调用真实的 Claude。
 要点：备注不进规则引擎；回放只看到那一天以及之前的；联网搜到的东西对不上搜索结果里的链接就丢掉；查过的日子不再查。
 """
-import json, os, shutil, sys, tempfile, threading, time, unittest
+import datetime, json, os, shutil, sys, tempfile, threading, time, unittest
 from http.server import ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, 'tests'))
 TMP = tempfile.mkdtemp(prefix='fe_notes_unit_')
 os.environ['FE_NOTES_DIR'] = TMP
+# 这些测试的“现在”固定在 2026-11-16 中午（NOW），所以 K 线也截到 2026-11-16：每天的数据刷新不会让“下一次财报”之类的结论跟着变
+CUT = '2026-11-16'
+DATA = tempfile.mkdtemp(prefix='fe_notes_data_')
+for _t in ('NVDA', 'QQQ', 'SPCX', 'JOBY'):
+    with open(os.path.join(ROOT, 'data', _t + '.csv'), encoding='utf-8') as _f, open(os.path.join(DATA, _t + '.csv'), 'w', encoding='utf-8') as _g:
+        _g.writelines(x for k, x in enumerate(_f) if k == 0 or x[:10] <= CUT)
 import notes                # noqa: E402
 import panel                # noqa: E402
 from test_panel import Server, http, FakeClaude, FAKE_KEY     # noqa: E402
+os.environ['FE_DATA_DIR'] = DATA          # 放在 import test_panel 之后：它导入时会清掉这个变量
 
 EVENTS = [dict(date='2026-08-26', kind='earnings', title='财报日'), dict(date='2026-11-17', kind='earnings', title='财报日'),
           dict(date='2026-09-10', kind='dividend', title='除息日，每股派 0.01'), dict(date='bad', kind='earnings', title='x'), dict(date='2026-01-01', kind='ufo', title='x')]
@@ -178,10 +185,12 @@ class Api(unittest.TestCase):
     def setUpClass(cls):
         cls.fake = ThreadingHTTPServer(('127.0.0.1', 0), FakeClaude)
         threading.Thread(target=cls.fake.serve_forever, daemon=True).start()
-        cls.s = Server({'ANTHROPIC_API_KEY': FAKE_KEY, 'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{cls.fake.server_address[1]}'})
-        cls.nokey = Server()
+        cls.s = Server({'ANTHROPIC_API_KEY': FAKE_KEY, 'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{cls.fake.server_address[1]}', 'FE_DATA_DIR': DATA})
+        cls.nokey = Server({'FE_DATA_DIR': DATA})
         os.environ['FE_NOTES_DIR'] = cls.s.notes
-        notes.refresh('NVDA', events=lambda t: EVENTS, headlines=lambda t: HEADS, now=NOW)
+        # 服务端按真实的今天找“下一次财报”：再加一个 40 天后的财报日，过了 11-17 这条测试也照样有下一次可找
+        cls.next_e = dict(date=(datetime.date.today() + datetime.timedelta(days=40)).isoformat(), kind='earnings', title='财报日')
+        notes.refresh('NVDA', events=lambda t: EVENTS + [cls.next_e], headlines=lambda t: HEADS, now=NOW)
 
     @classmethod
     def tearDownClass(cls):
@@ -256,7 +265,8 @@ class Api(unittest.TestCase):
         self.assertEqual((code, r['source']), (200, 'claude'), r.get('notice'))
         sent = FakeClaude.seen[-1][2]
         body = json.loads(sent['messages'][0]['content'])
-        self.assertEqual(body['context']['next_earnings']['date'], '2026-11-17')
+        want = min(d for d in ('2026-11-17', self.next_e['date']) if d >= datetime.date.today().isoformat())
+        self.assertEqual(body['context']['next_earnings']['date'], want)
         self.assertTrue(any(n['date'] == '2026-08-26' and n['fact'] for n in body['context']['notes']))
         self.assertIn('不要猜原因', sent['system'])
         self.assertGreaterEqual(r['notes_used'], 3)

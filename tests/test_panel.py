@@ -197,7 +197,8 @@ class RefreshAppendOnly(unittest.TestCase):
 
     def test_existing_single_rows_get_a_side_check_not_an_edit(self):
         lines = self.full.splitlines(keepends=True)
-        k = max(n for n, ln in enumerate(lines) if '(single)' in ln)     # 存到最后一条单一来源的行为止（之后的数据更新会追加多来源的行）
+        # 存到最后一条「别的来源」的单一来源行为止（yahoo 自己的单一来源行，没法再拿 yahoo 交叉核对）
+        k = max(n for n, ln in enumerate(lines) if '(single)' in ln and not ln.rstrip().split(',')[-1].startswith('yahoo'))
         upto = ''.join(lines[:k + 1])
         with open(os.path.join(self.tmp, 'NVDA.csv'), 'w', newline='') as f:
             f.write(upto)                                        # last stored row is yennanliu(single)
@@ -270,7 +271,7 @@ class NoKey(unittest.TestCase):
         p = self.s.port
         code, body = http(p, '/api/meta'); m = json.loads(body)
         self.assertEqual(code, 200); self.assertFalse(m['ai']['enabled']); self.assertIn('ANTHROPIC_API_KEY', m['ai']['reason'])
-        self.assertEqual([t['ticker'] for t in m['tickers']], ['SPCX', 'NVDA', 'QQQ'])
+        self.assertEqual([t['ticker'] for t in m['tickers']], list(panel.TICKERS))       # 数据目录里有日线的那几只（2026-11-18 起有 JOBY）
         for t in ('SPCX', 'NVDA', 'QQQ'):
             self.assertEqual(http(p, f'/api/bars?ticker={t}')[0], 200)
             self.assertEqual(json.loads(http(p, f'/api/state?ticker={t}&asof=2026-11-13')[1])['asof'], '2026-11-13')
@@ -326,7 +327,10 @@ class NoKey(unittest.TestCase):
             st = panel.state_at(t, asof or None)
             q = json.loads(http(self.s.port, f'/api/quant?ticker={t}&model={m}&asof={asof}')[1])
             import narrate
-            allowed = narrate.allowed_numbers(st, narrate.build_facts(t, st['asof']), q['signal'], q['score'], q['lines'], q['history'], panel.backtest_summary(), 8, 15, 5)
+            import engine as E
+            hist = float(E.compute(panel.load(t)['B'])['hist'][st['index']])      # MACD 卡片上写的柱子值，也是引擎算的
+            allowed = narrate.allowed_numbers(st, narrate.build_facts(t, st['asof']), q['signal'], q['score'], q['lines'], q['history'], panel.backtest_summary(), 8, 15, 5,
+                                              round(hist, 2))
             self.assertEqual(narrate.bad_numbers(dict(hook=text, story='', final='', watch=[], steps=[]), allowed), [], (t, m, asof))
         four = json.loads(http(self.s.port, '/api/learn?ticker=NVDA&model=four&asof=2025-05-13')[1])
         self.assertEqual(four['headline']['tone'], 'go'); self.assertIn('不说“该买”', four['headline']['sub'])
@@ -337,7 +341,19 @@ class NoKey(unittest.TestCase):
         chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
         if not os.path.exists(chrome):
             self.skipTest('没有 Google Chrome')
-        r = subprocess.run([os.path.join(ROOT, 'tests', 'run_selftest.sh'), str(self.s.port)], capture_output=True, text=True, timeout=240)
+        # 对话页的存档：一段只有旧的「一键解释」卡片（不该出现在历史里），一段是真的问答、中途换过一次图（自检会打开它）
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
+        card = dict(role='assistant', kind='explain', text='【一键解释】……', learn=dict(cards=[]))
+        convs = [dict(id='aaaaaaaaaaaa', title='一键解释 · QQQ 11-16', created=now, updated=now, ticker='QQQ', messages=[card], usage=dict(tokens_in=0, tokens_out=0, cache_read=0, calls=0)),
+                 dict(id='bbbbbbbbbbbb', title='还缺哪一项？', created=now, updated=now, ticker='NVDA', ctx_key='x', usage=dict(tokens_in=1200, tokens_out=700, cache_read=9800, cache_write=9000, calls=2),
+                      messages=[card, dict(role='user', text='还缺哪一项？', chip='SPCX 2026-11-16 · 四证·抄底 v1.0', context='{}'),
+                                dict(role='assistant', text='还缺两项：**地量**和**站回成本线**。', meta=dict(tokens_in=600, tokens_out=300, cache_read=0, cache_write=9000)),
+                                dict(role='user', text='换成 NVDA 呢？', chip='NVDA 2026-11-16 · 四证·抄底 v1.0', context='{}'),
+                                dict(role='assistant', text='NVDA 也差两项。', meta=dict(tokens_in=600, tokens_out=400, cache_read=9800, searches=1, sources=[dict(title='例子', url='https://example.com/n')]))])]
+        for cv in convs:
+            with open(os.path.join(self.s.chats, cv['id'] + '.json'), 'w', encoding='utf-8') as f:
+                json.dump(cv, f, ensure_ascii=False)
+        r = subprocess.run([os.path.join(ROOT, 'tests', 'run_selftest.sh'), str(self.s.port), 'chatseed=1'], capture_output=True, text=True, timeout=240)
         res = json.loads(r.stdout.strip().splitlines()[-1])
         failed = [k for k, v in res.get('checks', {}).items() if not v]
         self.assertTrue(res.get('pass'), f"自检失败：{res.get('error')} {failed} {[res.get('info', {}).get(k) for k in failed]}")

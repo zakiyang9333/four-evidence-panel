@@ -35,16 +35,17 @@ class Store(unittest.TestCase):
                           dict(role='assistant', text='意思是……'),
                           dict(role='user', text='那止损呢', context=None)]
         m = chat.api_messages(c)
-        self.assertEqual([x['role'] for x in m], ['user', 'assistant', 'user', 'assistant', 'user'])       # 以助手开头时补一句用户的话
-        self.assertEqual(m[1]['content'][0]['text'], '【一键解释】……')
-        self.assertEqual([b['text'][:6] for b in m[2]['content']], ['【图表数据】', '第 3 张没'])
-        self.assertEqual(len(m[4]['content']), 1)                                                         # 图表没变：第二问不再带
-        self.assertEqual(m[4]['content'][-1]['cache_control'], {'type': 'ephemeral'})                     # 到这里为止的内容可缓存
-        self.assertNotIn('cache_control', m[2]['content'][-1])
+        self.assertEqual([x['role'] for x in m], ['user', 'assistant', 'user'])                           # 旧的一键解释卡片不发给 AI
+        self.assertNotIn('一键解释', json.dumps(m, ensure_ascii=False))
+        self.assertEqual([b['text'][:6] for b in m[0]['content']], ['【图表数据】', '第 3 张没'])
+        self.assertEqual(len(m[2]['content']), 1)                                                         # 图表没变：第二问不再带
+        self.assertEqual(m[2]['content'][-1]['cache_control'], {'type': 'ephemeral'})                     # 到这里为止的内容可缓存
+        self.assertNotIn('cache_control', m[0]['content'][-1])
         self.assertNotIn('cache_control', c['messages'][3])                                               # 存档本身不被改动
         pub = chat.public(c)
         self.assertTrue(all('context' not in x for x in pub['messages']))                                 # 页面拿不到那一大段原始数据
-        self.assertEqual([x['has_context'] for x in pub['messages']], [False, True, False, False])
+        self.assertEqual([(x['role'], x['has_context']) for x in pub['messages']], [('user', True), ('assistant', False), ('user', False)])   # 也看不到旧卡片
+        self.assertEqual(c['messages'][0]['kind'], 'explain')                                             # 旧卡片还在文件里，没删
 
     def test_storage_is_local_and_ids_are_checked(self):
         c = chat.new('QQQ'); c['messages'].append(dict(role='user', text='你好')); c['title'] = chat.title_from('你好')
@@ -60,8 +61,10 @@ class Store(unittest.TestCase):
         self.assertEqual(chat.title_from(long), long[:22] + '…'); self.assertEqual(chat.title_from('短问题'), '短问题')
 
     def test_system_prompt_carries_the_house_rules(self):
-        for must in ('8 岁', '不给具体的买卖指令', '直接说不知道', '规则是写死的', '核心仓', '没有被证明管用'):
+        for must in ('8 岁', '不说“买”“卖”', '改不改由你定', '直接说不知道', '规则是写死的', '没有被证明管用', '第一句就是结论', '最多三条理由', '不在结尾重复'):
             self.assertIn(must, chat.SYSTEM)
+        self.assertIn('核心仓', chat.system())                                                          # 核心仓的规矩在他自己的规则里（起步模板就有）
+        self.assertNotIn('一键解释', chat.SYSTEM)
 
 
 class Api(unittest.TestCase):
@@ -129,25 +132,30 @@ class Api(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.s.chats, cid + '.json')))
         self.assertFalse(os.path.isdir(os.path.join(ROOT, 'data', 'chats')) and cid + '.json' in os.listdir(os.path.join(ROOT, 'data', 'chats')))
         rows = json.loads(http(self.s.port, '/api/chat/list')[1])['chats']
-        self.assertEqual((rows[0]['id'], rows[0]['count'], rows[0]['title']), (cid, 6, '现在该怎么看？'))
+        self.assertEqual((rows[0]['id'], rows[0]['count'], rows[0]['asks'], rows[0]['title']), (cid, 6, 3, '现在该怎么看？'))
+        self.assertGreater(rows[0]['tokens'], 0)                                                          # 用量写在历史列表里，不逐条列
         self.assertTrue(json.loads(http(self.s.port, '/api/chat/delete', {'id': cid})[1])['removed'])
         self.assertFalse(json.loads(http(self.s.port, f'/api/chat/get?id={cid}')[1])['ok'])
 
-    def test_one_click_explanation_joins_the_chat_for_free(self):
-        n = len(FakeClaude.seen)
-        r = json.loads(http(self.s.port, '/api/chat/explain', dict(ticker='QQQ', asof='', model='four'))[1])
-        self.assertTrue(r['ok']); self.assertEqual(len(FakeClaude.seen), n)                           # 不调用 AI
-        m = r['conv']['messages'][0]
-        self.assertEqual((m['role'], m['kind']), ('assistant', 'explain'))
-        self.assertGreaterEqual(len(m['learn']['cards']), 12); self.assertTrue(r['conv']['title'].startswith('一键解释 · QQQ'))
-        ev = self.send(id=r['conv']['id'], ticker='QQQ', asof='', model='four', text='第 3 张没看懂')
+    def test_old_cards_are_kept_but_never_shown_listed_or_sent(self):
+        """以前「一键解释」放进对话的卡片：文件里留着，页面拿不到、历史里不列、提问时不发给 AI；第一句提问就是标题。"""
+        card = dict(role='assistant', kind='explain', text='【一键解释】QQQ 卡片……', learn=dict(cards=[]))
+        only = dict(chat.new('QQQ'), id='cccccccccccc', title='一键解释 · QQQ 11-16', messages=[card])
+        mixed = dict(chat.new('QQQ'), id='dddddddddddd', title='一键解释 · QQQ 11-17', messages=[card])
+        for cv in (only, mixed):
+            with open(os.path.join(self.s.chats, cv['id'] + '.json'), 'w', encoding='utf-8') as f:
+                json.dump(cv, f, ensure_ascii=False)
+        self.assertNotIn('cccccccccccc', [x['id'] for x in json.loads(http(self.s.port, '/api/chat/list')[1])['chats']])     # 只有旧卡片：不进历史
+        self.assertEqual(json.loads(http(self.s.port, '/api/chat/get?id=cccccccccccc')[1])['conv']['messages'], [])
+        ev = self.send(id='dddddddddddd', ticker='QQQ', asof='', model='four', text='还缺哪一项？')
+        self.assertEqual(ev[0][1]['title'], '还缺哪一项？')                                              # 第一句提问就是标题
         sent = FakeClaude.seen[-1][2]
-        self.assertEqual([x['role'] for x in sent['messages']], ['user', 'assistant', 'user'])
-        self.assertIn('【一键解释】', sent['messages'][1]['content'][0]['text'])                        # 追问时它看得到那些卡片
-        self.assertIn('3. ', sent['messages'][1]['content'][0]['text'])
-        self.assertEqual(ev[0][1]['title'], r['conv']['title'])                                       # 标题保持
-        r2 = json.loads(http(self.s.port, '/api/chat/explain', dict(id=r['conv']['id'], ticker='NVDA', asof='', model='houshou'))[1])
-        self.assertEqual([x.get('kind') for x in r2['conv']['messages']], ['explain', None, None, 'explain'])   # 接在后面，不改前面的
+        self.assertEqual([m['role'] for m in sent['messages']], ['user'])
+        self.assertNotIn('一键解释', json.dumps(sent, ensure_ascii=False))                                # 旧卡片不发给 AI
+        self.assertEqual([m['role'] for m in ev[-1][1]['conv']['messages']], ['user', 'assistant'])      # 页面也看不到
+        with open(os.path.join(self.s.chats, 'dddddddddddd.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['messages'][0]['kind'], 'explain')                              # 文件里还在，没删
+        self.assertEqual(http(self.s.port, '/api/chat/explain', dict(ticker='QQQ'))[0], 404)               # 往对话里塞卡片的接口已经拿掉
 
     def test_bad_requests_and_no_key(self):
         self.assertEqual(http(self.s.port, '/api/chat/send', dict(ticker='NVDA', text='  '))[0], 400)
@@ -156,7 +164,6 @@ class Api(unittest.TestCase):
         code, txt = http(self.nokey.port, '/api/chat/send', dict(ticker='NVDA', text='hi'))
         r = json.loads(txt)
         self.assertEqual((code, r['ok'], r['code']), (200, False, 'disabled'))
-        self.assertTrue(json.loads(http(self.nokey.port, '/api/chat/explain', dict(ticker='NVDA'))[1])['ok'])      # 没密钥：一键解释照常
         self.assertFalse(json.loads(http(self.s.port, '/api/chat/get?id=../../x')[1])['ok'])
         self.assertEqual(http(self.s.port, '/api/chat/send', dict(ticker='NVDA', text='hi'), {'Origin': 'https://example.com'})[0], 403)
 

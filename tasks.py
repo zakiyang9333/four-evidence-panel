@@ -1,7 +1,9 @@
 """「任务」页的后端：盯盘任务和分析记录。全部存在本机 data/quant/（不进 git），不往外发任何东西。
 
 - 盯盘任务：选一只标的、一个模型、一个方向（外加周期和 K 线级别），程序在每次有新 K 线之后替你把这套清单看一眼。
-  清单在某一根 K 线上齐了，就在任务页记一笔并亮红点。它只是提醒：不下单，不发通知到别处，也不替你做决定。
+  清单在某一根 K 线上齐了，就在任务页记一笔并亮红点。它只是提醒：不下单，也不替你做决定。
+  任务页里打开了「提醒」，还会发一条 Mac 通知和/或 iMessage（mine.send；发到手机的那条不带持仓数字）。
+- 线的提醒（line_alerts）：收盘价穿过他持仓里的线（成本、短 put 行权价、归零线、估值参考），同样发一条。
   检查是按收盘后的 K 线做的，和分析页点出来的结果是同一段代码（quant.result），不会出现两边说法不一样。
 - 分析记录：每点一次「AI 分析当前图表」记一行（哪只、哪一天、哪个模型、哪个方向、当时的结论和表盘），点一行能回到那一刻。
 """
@@ -11,6 +13,7 @@ import secrets
 import threading
 import time
 
+import mine
 import panel
 import quant
 
@@ -73,9 +76,35 @@ def _check(task, force=False):
             task['hits'].insert(0, dict(asof=asof, verdict=cell['verdict'], price=cell['price'], zone=cell['zone'], stop=cell['stop'], t1=cell['t1'], t2=cell['t2'],
                                         rr=cell['rr'], found_at=now_text(), seen=False))
             del task['hits'][MAX_HITS:]
+            # 提醒（他在任务页打开了才发）：Mac 通知可以带细节；推到手机的那条只说哪只、什么事，不带任何持仓数字
+            mine.send(f"task:{task['id']}:{asof}", f"{task['label']}：{cell['verdict']}（{asof} 收盘，现价 {cell['price']}）",
+                      f"{task['ticker']} 盯盘任务条件齐了（{asof} 收盘），打开面板看")
     task.update(checked_asof=d[-1], checked_at=now_text(),
                 last=dict(asof=cell['asof'], state=cell['state'], verdict=cell['verdict'], ok=cell['ok'], of=cell['of'], price=cell['price'], supported=cell['supported']))
     return True
+
+
+def line_alerts():
+    """收盘价穿过他持仓里的线（成本、短 put 行权价、归零线、估值参考）时提醒一次（同一条线同一天只提醒一次）。
+    只比日线最后两根收盘。返回这一次发现的穿越（不管有没有打开提醒）。"""
+    import portfolio
+    st, err = portfolio.read_state()
+    if err:
+        return []
+    out = []
+    for t, ov in portfolio.overlays(st).items():
+        B = panel.load(t)['B']
+        if len(B['c']) < 2:
+            continue
+        prev, last, day = float(B['c'][-2]), float(B['c'][-1]), B['d'][-1]
+        for ln in ov['lines'] + ov['valuation']:
+            L = float(ln['price'])
+            if (prev - L) * (last - L) < 0 or (last == L != prev):
+                way = '跌破' if last < prev else '站上'
+                out.append(dict(ticker=t, date=day, label=ln['label'], way=way))
+                mine.send(f"line:{t}:{ln['label']}:{day}", f"{t} {day} 收盘 {last:.2f}，{way}了你的「{ln['label']}」{L:g}",
+                          f"{t} {day} 收盘碰到了你持仓里的一条线，打开面板看")
+    return out
 
 
 def listing(check=True, force=False):

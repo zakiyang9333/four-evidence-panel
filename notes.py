@@ -9,7 +9,7 @@
 
 规矩：这些只是备注，不进规则引擎，不改任何证据的判定。回放到某一天时，只给那一天以及之前的备注。
 存在本机 data/notes/<代码>.json（手写的内容是你自己的，不进 git）。
-用法：python3 notes.py --refresh   （定时任务用：更新三只票的事件日和新闻存档）
+用法：python3 notes.py --refresh   （定时任务用：更新每只标的的事件日和新闻存档）
 """
 import bisect
 import datetime

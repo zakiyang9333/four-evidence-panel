@@ -88,20 +88,24 @@ window.FEPortfolio = (() => {
     return h;
   }
 
+  /* 忽略这一笔：记在面板自己的清单里（data/quant/pf_ignore.json），不改持仓文件 */
+  const ignBtn = p => p.key ? '<button class="pf-ign" data-ign="' + esc(p.key) + '" data-on="' + (p.ignored ? '0' : '1') + '" title="' +
+    (p.ignored ? '恢复：重新交给 AI、画到图上' : '忽略：这一笔不交给 AI、不画到图上（持仓文件不改）') + '">' + (p.ignored ? '已忽略 · 恢复' : '忽略') + '</button>' : '';
+
   function positions(pf) {
     const rows = pf.positions || [];
     if (!rows.length) return '<div class="pf-none">文件里没有持仓。</div>';
     let h = '<div class="pf-scroll"><table class="pf-table" id="pfPositions"><thead><tr><th>标的</th><th>类型</th><th>数量</th><th>成本</th><th>现价</th><th>浮盈亏</th><th>所属侧</th><th>四证状态</th><th>备注</th></tr></thead><tbody>';
     rows.forEach(p => {
       const cls = isNum(p.pnl) ? (p.pnl >= 0 ? 'pos' : 'neg') : '';
-      h += '<tr data-symbol="' + esc(p.symbol) + '"><td><b>' + esc(p.symbol || '—') + '</b>' + (p.underlying && p.underlying !== p.symbol ? '<small>看 ' + esc(p.underlying) + '</small>' : '') + '</td>' +
+      h += '<tr data-symbol="' + esc(p.symbol) + '"' + (p.ignored ? ' class="pf-ignored"' : '') + '><td><b>' + esc(p.symbol || '—') + '</b>' + (p.underlying && p.underlying !== p.symbol ? '<small>看 ' + esc(p.underlying) + '</small>' : '') + '</td>' +
         '<td>' + esc(TYPE[p.type] || p.type || '—') + '</td><td class="r">' + qty(p.qty) + '</td><td class="r">' + px(p.avg_cost) + '</td>' +
         '<td class="r">' + px(p.last) + (isNum(p.after_hours) ? '<small>盘后 ' + px(p.after_hours) + '</small>' : '') + '</td>' +
         '<td class="r ' + cls + '">' + signed(p.pnl) + (p.pnl_est ? ' ' + EST : '') + '</td>' +
         '<td><span class="side side-' + esc(p.side || '') + '">' + esc(SIDE[p.side] || p.side || '—') + '</span></td>' + checkCell(pf, p.check_ticker) +
-        '<td class="note">' + esc(p.note || '') + '</td></tr>';
+        '<td class="note">' + esc(p.note || '') + ignBtn(p) + '</td></tr>';
     });
-    h += '</tbody></table></div><p class="pf-cap">浮盈亏文件里没有，这里按（现价 − 成本）× 数量算，期权每张按 100 股，所以标“估算”。四证状态来自 four_evidence_check.py：有 underlying 字段的仓位（期权、关联 ETF）看它的标的。</p>';
+    h += '</tbody></table></div><p class="pf-cap">「忽略」只在面板里生效：这一笔不交给 AI、不画到图上，持仓文件一个字不改。浮盈亏文件里没有，这里按（现价 − 成本）× 数量算，期权每张按 100 股，所以标“估算”。四证状态来自 four_evidence_check.py：有 underlying 字段的仓位（期权、关联 ETF）看它的标的。</p>';
     return h;
   }
 
@@ -110,9 +114,9 @@ window.FEPortfolio = (() => {
     if (!rows.length) return '';
     let h = '<h3>其它账户</h3><div class="pf-scroll"><table class="pf-table" id="pfOthers"><thead><tr><th>账户</th><th>标的</th><th>类型</th><th>方向</th><th>数量</th><th>开仓价</th><th>杠杆</th><th>钱包</th><th>所属侧</th><th>四证状态</th><th>备注</th></tr></thead><tbody>';
     rows.forEach(p => {
-      h += '<tr><td>' + esc(p.broker || '—') + '</td><td><b>' + esc(p.symbol || '—') + '</b></td><td>' + esc(TYPE[p.type] || p.type || '—') + '</td><td>' + esc(DIR[p.side_dir] || p.side_dir || '—') + '</td>' +
+      h += '<tr' + (p.ignored ? ' class="pf-ignored"' : '') + '><td>' + esc(p.broker || '—') + '</td><td><b>' + esc(p.symbol || '—') + '</b></td><td>' + esc(TYPE[p.type] || p.type || '—') + '</td><td>' + esc(DIR[p.side_dir] || p.side_dir || '—') + '</td>' +
         '<td class="r">' + qty(p.qty) + '</td><td class="r">' + px(p.entry) + '</td><td class="r">' + (isNum(p.leverage) ? p.leverage + 'X' : '—') + '</td><td class="r">' + (isNum(p.wallet_usd) ? '$' + money(p.wallet_usd, 1) : '—') + '</td>' +
-        '<td><span class="side side-' + esc(p.side || '') + '">' + esc(SIDE[p.side] || p.side || '—') + '</span></td>' + checkCell(pf, p.check_ticker) + '<td class="note">' + esc(p.note || '') + '</td></tr>';
+        '<td><span class="side side-' + esc(p.side || '') + '">' + esc(SIDE[p.side] || p.side || '—') + '</span></td>' + checkCell(pf, p.check_ticker) + '<td class="note">' + esc(p.note || '') + ignBtn(p) + '</td></tr>';
     });
     return h + '</tbody></table></div>';
   }
@@ -184,5 +188,15 @@ window.FEPortfolio = (() => {
 
   document.addEventListener('change', e => { if (e.target && e.target.id === 'pfSnapSel') { snapName = e.target.value; lastHtml = ''; loadSnapshot(); } });
   document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-goto]'); if (b && opts.gotoTicker) opts.gotoTicker(b.dataset.goto); });
+  document.addEventListener('click', async e => {
+    const b = e.target.closest && e.target.closest('[data-ign]');
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const r = await fetch('/api/portfolio/ignore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: b.dataset.ign, ignore: b.dataset.on === '1' }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      lastHtml = ''; if (opts.reload) await opts.reload();
+    } catch (err) { b.disabled = false; }
+  });
   return { render, mdToHtml, asofText };
 })();

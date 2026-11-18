@@ -31,7 +31,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&a
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 function fmtP(x) {
   if (x == null || !isFinite(x)) return '—';
-  const a = Math.abs(x), d = a >= 1 ? 2 : a >= 0.1 ? 3 : 4;
+  const a = Math.abs(x), d = a >= 1 ? 2 : 4;          // 和后端 houshou.px() 同一个规矩：1 以上两位小数，以下四位（早年拆股调整后的价格只有几美分）
   return x.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 const fmtPct = (x, d = 2) => (x == null || !isFinite(x)) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(d) + '%';
@@ -144,7 +144,7 @@ function setView(v) {
   document.body.classList.toggle('view-pf', S.view === 'portfolio');
   $('#pfPage').hidden = S.view !== 'portfolio';
   $$('#viewSeg button').forEach(b => b.classList.toggle('on', b.dataset.view === S.view));
-  if (S.view === 'portfolio') { window.FEPortfolio.render(S.pf, { gotoTicker }); pollPortfolio(); }
+  if (S.view === 'portfolio') { window.FEPortfolio.render(S.pf, { gotoTicker, reload: () => pollPortfolio(true) }); pollPortfolio(); }
   if (S.bars) { renderTop(); syncUrl(); }
 }
 function gotoTicker(t) { setView('chart'); if (t !== S.ticker) setTicker(t); }
@@ -169,7 +169,7 @@ async function pollPortfolio(force) {
     const v = await api('/api/portfolio/version');
     if (force === true || !S.pf || v.version !== S.pf.version || v.ok !== S.pf.ok || (S.pf.ok && v.stale !== S.pf.stale)) {
       S.pf = await api('/api/portfolio');
-      window.FEPortfolio.render(S.pf, { gotoTicker });
+      window.FEPortfolio.render(S.pf, { gotoTicker, reload: () => pollPortfolio(true) });
       if (S.bars) { renderTop(); renderSide(); candle.applyOptions({ autoscaleInfoProvider: scaleProvider }); }
       S.rev++;
     }
@@ -208,9 +208,25 @@ function rebuildIndicators() {
   }
   if (S.ind.kdj) { ind.kdjPane = p; ind.kk = line('#e6e8ee', p, p2); ind.kd = line(C.vwap, p, p2); ind.kj = line('#f472b6', p, p2); p++; }
   if (S.ind.atr) { ind.atrPane = p; ind.atr = line('#7dd3fc', p); p++; }
+  if (S.ind.ma) ind.ma = MA_P.map((n, j) => line(MA_C[j], 0));          // 主图均线：从指标库加
+  if (S.ind.ema) ind.ema = EMA_P.map((n, j) => line(EMA_C[j], 0));
   chart.panes().forEach((pn, k) => pn.setStretchFactor(k === 0 ? 3.6 : 1));
-  $('#indCount').textContent = ['vol', 'macd', 'boll', 'rsi', 'kdj', 'atr'].filter(k => S.ind[k]).length;
+  $('#indCount').textContent = CHART_IND.filter(k => S.ind[k]).length;
   if (S.bars) applyData();
+}
+
+/* 主图均线（MA 5/10/20/60、EMA 12/26）：按收盘价在浏览器里算，第 i 根只用到第 i 根和以前的收盘价。只画图，不进任何判定 */
+const MA_P = [5, 10, 20, 60], MA_C = ['#e6e8ee', '#facc15', '#c084fc', '#4ade80'], EMA_P = [12, 26], EMA_C = ['#fb923c', '#38bdf8'];
+const CHART_IND = ['ma', 'ema', 'vol', 'macd', 'boll', 'rsi', 'kdj', 'atr'];
+let MAV = { ma: [], ema: [] };
+function smaArr(src, n) { const out = new Array(src.length).fill(null); let s = 0; for (let i = 0; i < src.length; i++) { s += src[i]; if (i >= n) s -= src[i - n]; if (i >= n - 1) out[i] = s / n; } return out; }
+function emaArr(src, n) {
+  const out = new Array(src.length).fill(null), k = 2 / (n + 1); let e = null;
+  for (let i = 0; i < src.length; i++) {
+    if (i === n - 1) { let s = 0; for (let j = 0; j < n; j++) s += src[j]; e = s / n; } else if (i >= n) e = src[i] * k + e * (1 - k);
+    if (e != null) out[i] = e;
+  }
+  return out;
 }
 
 function buildData() {
@@ -229,6 +245,8 @@ function buildData() {
   }
   const pts = a => (a || []).map((v, i) => (v == null ? { time: b.d[i] } : { time: b.d[i], value: v }));
   ['rsi', 'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_up', 'boll_low', 'atr'].forEach(k => { D[k] = pts(b[k]); });
+  MAV = { ma: MA_P.map(n => smaArr(b.c, n)), ema: EMA_P.map(n => emaArr(b.c, n)) };
+  D.ma = MAV.ma.map(pts); D.ema = MAV.ema.map(pts);
 }
 
 function applyData() {
@@ -242,6 +260,8 @@ function applyData() {
   if (ind.rsi) ind.rsi.setData(D.rsi.slice(0, m));
   if (ind.kk) { ind.kk.setData(D.kdj_k.slice(0, m)); ind.kd.setData(D.kdj_d.slice(0, m)); ind.kj.setData(D.kdj_j.slice(0, m)); }
   if (ind.atr) ind.atr.setData(D.atr.slice(0, m));
+  if (ind.ma) ind.ma.forEach((s, j) => s.setData(D.ma[j].slice(0, m)));
+  if (ind.ema) ind.ema.forEach((s, j) => s.setData(D.ema[j].slice(0, m)));
   applyLive();
   S.rev++;
 }
@@ -477,6 +497,32 @@ function manualAvwap(d) {
   api('/api/avwap?ticker=' + S.ticker + '&anchor=' + d.d + '&asof=' + asofDate()).then(j => { S.avwap[key] = j; S.rev++; }).catch(() => { delete S.avwap[key]; });
   return null;
 }
+/* 锚定 VWAP 的上下带：从锚点那根起，按成交量加权算典型价（(高+低+收)/3，和中间那条线同一个价）的标准差，
+   中线上下各放 AVWAP_BAND 倍。录屏里只看到两条带、没说几倍，这里取 1 倍【估算】。只是画线，不进任何判定。 */
+const AVWAP_BAND = 1;
+function avwapBands(s) {
+  const b = S.bars; if (!b || !b.v || b.d[s.anchor] !== s.anchor_date) return null;      // 日期对不上就不画，宁缺勿错
+  let W = 0, mean = 0, M2 = 0; const up = [], lo = [];
+  for (let k = 0; k < s.values.length; k++) {
+    const j = s.anchor + k, v = b.v[j], tp = (b.h[j] + b.l[j] + b.c[j]) / 3, mid = s.values[k];
+    if (v > 0 && isFinite(tp)) { W += v; const dl = tp - mean; mean += v / W * dl; M2 += v * dl * (tp - mean); }
+    const sd = W > 0 ? Math.sqrt(Math.max(0, M2 / W)) : null;
+    up.push(mid == null || sd == null ? null : mid + AVWAP_BAND * sd); lo.push(mid == null || sd == null ? null : mid - AVWAP_BAND * sd);
+  }
+  return { up, lo };
+}
+function fillBand(start, up, lo, color, alpha) {
+  const top = [], bot = [];
+  for (let k = 0; k < up.length; k++) {
+    if (up[k] == null || lo[k] == null) continue;
+    const x = X(start + k), yu = Y(up[k]), yl = Y(lo[k]); if (x == null || yu == null || yl == null) continue;
+    top.push([x, yu]); bot.push([x, yl]);
+  }
+  if (top.length < 2) return;
+  ctx.beginPath(); top.forEach((p, k) => (k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+  for (let k = bot.length - 1; k >= 0; k--) ctx.lineTo(bot[k][0], bot[k][1]);
+  ctx.closePath(); ctx.fillStyle = rgba(color, alpha); ctx.fill();
+}
 function drawManual() {
   S.drawings.forEach((d, k) => {
     if (!visible(d)) return;
@@ -487,6 +533,13 @@ function drawManual() {
     else if (d.type === 'arrow') drawArrow(d.a, d.b, d.text, sel ? '#ffffff' : '#fde047', sel);
     else if (d.type === 'avwap') {
       const s = manualAvwap(d); if (!s || !s.values.length) return;
+      const bd = avwapBands(s);
+      if (bd) {          // 上下带和中间的填色（录屏 10 的 00:36）；带宽是估算，选中这条线时写在线尾
+        fillBand(s.anchor, bd.up, bd.lo, '#22c55e', sel ? 0.16 : 0.09);
+        drawPolyline(s.anchor, bd.up, sel ? '#ffffff' : '#4ade80', 1); drawPolyline(s.anchor, bd.lo, sel ? '#ffffff' : '#4ade80', 1);
+        const xu = X(s.anchor + bd.up.length - 1), yu = Y(bd.up[bd.up.length - 1]);
+        if (sel && xu != null && yu != null) label('上下带：成交量加权 ±' + AVWAP_BAND + ' 倍标准差（倍数是估算）', xu + 8, yu - 12, '#4ade80');
+      }
       drawPolyline(s.anchor, s.values, sel ? '#ffffff' : '#f0abfc', 1.8);
       const x = X(s.anchor), y = Y(s.values[0]);
       if (x != null && y != null) { ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fillStyle = '#f0abfc'; ctx.fill(); }
@@ -542,7 +595,7 @@ function snap(pt) {      // 吸附到这根 K 线的最高或最低价（14px �
   if (yh != null && Math.abs(pt.y - yh) < 14) p = b.h[i]; else if (yl != null && Math.abs(pt.y - yl) < 14) p = b.l[i];
   return { i, p, d: b.d[i] };
 }
-const HINTS = { fan: ['扇形：先点高点', '扇形：再点低点（在高点右边）'], avwap: ['锚定 VWAP：点一根 K 线作为起算日'], hline: ['水平线：点一个价位'], arrow: ['箭头：先点起点（文字写在这里）', '箭头：再点要指向的位置'] };
+const HINTS = { fan: ['扇形：先点高点', '扇形：再点低点（在高点右边）'], avwap: ['锚定 VWAP：点一根 K 线作为起算日（上下两条带是成交量加权的 1 倍标准差，倍数是估算）'], hline: ['水平线：点一个价位'], arrow: ['箭头：先点起点（文字写在这里）', '箭头：再点要指向的位置'] };
 function setTool(t) {
   if (t === 'avwap' && !isDaily()) { toast('周线上不画锚定 VWAP（成本线按日线算），切回日线再用。'); t = 'cursor'; }
   S.tool = t; S.pending = null; S.cur = null; $('#textBox').hidden = true;
@@ -675,6 +728,7 @@ async function setTicker(t, date) {
   S.state = null; S.avwap = {}; S.hover = null; S.flash = null; S.spanHome = null;
   window.FENarrate.reset(); window.FEQuant.reset(); window.FENotes.reset();
   if (S.live && S.live.ticker !== t) S.live = null;
+  stopPlay();
   setTimeout(pollLive, 0);
   if (S.tool === 'avwap' && !isDaily()) setTool('cursor');
   buildData();
@@ -711,7 +765,29 @@ function setAsof(i, keepView) {
   noteSpan(); applyData(); if (!keepView) focusView();
   renderReplay(); renderLegend(); renderTop(); syncUrl(); queueState();
 }
+/* 回放自动往后播（录屏里的「开奖」）：一根一根出 K 线，每根都按那天收盘重算；视野跟着最新一根往右挪。
+   播到最新一根、或者手动拖滑块 / 点前后 / 选日期 / 换标的，就停。 */
+let playTimer = null;
+const playSpeed = () => Number($('#rpSpeed').value) || 500;
+function renderPlay() { const b = $('#rpPlay'); if (!b) return; b.textContent = playTimer ? '⏸ 暂停' : '▶ 播放'; b.classList.toggle('on', !!playTimer); }
+function stopPlay() { if (!playTimer) return; clearTimeout(playTimer); playTimer = null; renderPlay(); }
+function playStep() {
+  const ts = chart.timeScale(), r = ts.getVisibleLogicalRange();
+  setAsof(S.asof + 1, true);
+  if (r) { const over = S.asof + (S.pad || 3) - r.to; if (over > 0) ts.setVisibleLogicalRange({ from: r.from + over, to: r.to + over }); }
+}
+function startPlay() {
+  if (playTimer || !S.bars) return;
+  if (S.asof >= lastIdx()) { toast('已经是最新一根，后面没有 K 线可播。先把回放拖回历史上的某一天。'); return; }
+  const tick = () => {
+    playStep();
+    if (S.asof >= lastIdx()) { playTimer = null; renderReplay(); toast('播到最新一根了。'); return; }
+    playTimer = setTimeout(tick, playSpeed());
+  };
+  playTimer = setTimeout(tick, playSpeed()); renderPlay();
+}
 function setReplay(on, date) {
+  if (!on) stopPlay();
   S.replayOn = on;
   if (!on) setAsof(lastIdx()); else if (date) setAsof(indexAt(date));
   renderReplay(); renderTop(); syncUrl();
@@ -812,6 +888,8 @@ function renderLegend() {
     '<span>低 <b class="' + cls + '">' + fmtP(b.l[i]) + '</b></span><span>收 <b class="' + cls + '">' + fmtP(b.c[i]) + '</b></span>' +
     '<span class="' + cls + '">' + fmtPct(chg) + '</span>' + (src ? '<span class="src">单一来源：' + esc(src) + '</span>' : '') +
     (S.ind.boll && b.boll_mid && b.boll_mid[i] != null ? '<span class="bl"><b>BOLL(20,2)</b> 上轨 ' + fmtP(b.boll_up[i]) + ' 中轨 ' + fmtP(b.boll_mid[i]) + ' 下轨 ' + fmtP(b.boll_low[i]) + '</span>' : '') +
+    (S.ind.ma && MAV.ma.length ? '<span class="mal"><b>MA</b>' + MA_P.map((n, j) => '<i style="color:' + MA_C[j] + '">' + n + ' ' + (MAV.ma[j][i] == null ? '—' : fmtP(MAV.ma[j][i])) + '</i>').join('') + '</span>' : '') +
+    (S.ind.ema && MAV.ema.length ? '<span class="mal"><b>EMA</b>' + EMA_P.map((n, j) => '<i style="color:' + EMA_C[j] + '">' + n + ' ' + (MAV.ema[j][i] == null ? '—' : fmtP(MAV.ema[j][i])) + '</i>').join('') + '</span>' : '') +
     (S.asof === lastIdx() ? liveLegend() : '');
   const f2 = x => (x == null ? '—' : x.toFixed(2));
   if (b.rsi) $('#legRsi').innerHTML = '<b>RSI(14)</b><span class="k1">' + f2(b.rsi[i]) + '</span><span>参考线 30 / 50 / 70</span>';
@@ -864,13 +942,20 @@ function renderSide() {
     '<p class="fine" id="sigFoot">' + esc(cd.footer || '') + '</p>';
   const tile = (cls, name, val, sub) => '<div class="tile ' + cls + '"><label>' + name + '</label><b>' + val + '</b><small>' + sub + '</small></div>';
   let h = tile('', '现价', fmtP(sg.price), st.asof + ' 收盘 · ' + fmtPct(st.chg_pct));
-  h += sg.entry_ref != null ? tile('entry w2', '建仓区（成本线附近）', fmtP(sg.entry_ref), '成本线（' + st.levels.anchor_date + ' 地量日起算）· 距现价 ' + fmtPct(sg.entry_ref_pct))
-    : tile('entry w2 off', '建仓区（成本线附近）', '—', '还没有地量日，成本线未起算');
-  h += tile('stop', '止损', fmtP(sg.stop), '低点 ' + fmtP(st.low.price) + ' 下 3% · ' + fmtPct(sg.stop_pct));
-  h += sg.target == null ? tile('target off', '第一目标', '—', '低点前没有可用的高点')
-    : sg.target_usable ? tile('target', '第一目标', fmtP(sg.target), '低点前 20 根的最高价 · ' + fmtPct(sg.target_pct))
-      : tile('target off', '第一目标', fmtP(sg.target), '不高于现价 2%，不作目标');
-  h += sg.rr != null ? tile('', '盈亏比', sg.rr.toFixed(2) + ' : 1', '按当日收盘价估算') : tile('off', '盈亏比', '—', sg.target_usable ? '现价贴近止损，不可算' : '没有可用目标');
+  if (!st.all4) {       // 四项没齐：止损、前高这些是结构位（「依据」和图上还看得到），不当交易价位显示
+    h += tile('entry w2 off', '建仓区（成本线附近）', '—', '条件没齐，不给区间');
+    h += tile('stop off', '止损', '—', '条件没齐，不给止损');
+    h += tile('target off', '第一目标', '—', '条件没齐，不给目标');
+    h += tile('off', '盈亏比', '—', '条件没齐，不算');
+  } else {
+    h += sg.entry_ref != null ? tile('entry w2', '建仓区（成本线附近）', fmtP(sg.entry_ref), '成本线（' + st.levels.anchor_date + ' 地量日起算）· 距现价 ' + fmtPct(sg.entry_ref_pct))
+      : tile('entry w2 off', '建仓区（成本线附近）', '—', '还没有地量日，成本线未起算');
+    h += tile('stop', '止损', fmtP(sg.stop), '低点 ' + fmtP(st.low.price) + ' 下 3% · ' + fmtPct(sg.stop_pct));
+    h += sg.target == null ? tile('target off', '第一目标', '—', '低点前没有可用的高点')
+      : sg.target_usable ? tile('target', '第一目标', fmtP(sg.target), '低点前 20 根的最高价 · ' + fmtPct(sg.target_pct))
+        : tile('target off', '第一目标', fmtP(sg.target), '不高于现价 2%，不作目标');
+    h += sg.rr != null ? tile('', '盈亏比', sg.rr.toFixed(2) + ' : 1', '按当日收盘价估算') : tile('off', '盈亏比', '—', sg.target_usable ? '现价贴近止损，不可算' : '没有可用目标');
+  }
   $('#tiles').innerHTML = h;
   let bs = '';
   st.evidence.forEach(e => { bs += '<div class="row ' + (e.lit ? 'on' : '') + '"><i>' + e.n + '</i><div><b>' + esc(e.name) + '</b>：' + esc(e.text) + '</div></div>'; });
@@ -941,8 +1026,8 @@ function flashStep(k, text, key, draw, auto) {
   const marks = draw && draw.length && isDaily() ? resolveMarks(draw) : null;
   const free = !marks && text && isDaily() ? parseCard(text) : null;
   if (marks) { if (marks.vol && S.ind.vol) flashPane(ind.volPane); if (marks.macd && S.ind.macd) flashPane(ind.macdPane); }
-  if (k === 0 || (free && free.vol)) { if (S.ind.vol) flashPane(ind.volPane); else if (k === 0) toast('成交量副图现在是关着的，在“指标”里打开就能看到。'); }
-  if (k === 1 || (free && free.macd)) { if (S.ind.macd) flashPane(ind.macdPane); else if (k === 1) toast('MACD 副图现在是关着的，在“指标”里打开就能看到。'); }
+  if (k === 0 || (free && free.vol)) { if (S.ind.vol) flashPane(ind.volPane); else if (k === 0) toast('成交量副图现在是关着的，在顶栏「技术指标」里打开就能看到。'); }
+  if (k === 1 || (free && free.macd)) { if (S.ind.macd) flashPane(ind.macdPane); else if (k === 1) toast('MACD 副图现在是关着的，在顶栏「技术指标」里打开就能看到。'); }
   if (!isDaily()) { if (!auto) toast('图上的标记只在日线上画，切回日线再点。'); return; }
   const dr = st.draw;
   if (k === 2 && !dr.fan) toast('这一天扇子还画不了。');
@@ -1088,6 +1173,8 @@ function renderReplay() {
   if (!S.bars) return;
   $('#rpRange').value = S.asof; $('#rpDate').value = asofDate();
   $('#rpInfo').textContent = S.asof < lastIdx() ? '按 ' + asofDate() + ' 收盘重算 · 之后的数据不参与 · 第 ' + (S.asof + 1) + ' / ' + S.bars.d.length + ' 根' : '已是最新一根（' + asofDate() + '）';
+  $('#rpPlay').disabled = !playTimer && S.asof >= lastIdx();
+  renderPlay();
 }
 
 async function refreshData() {
@@ -1108,6 +1195,109 @@ async function refreshData() {
 }
 
 // ---------- wiring ----------
+/* ---------- 技术指标库（照录屏 1 的 00:33 那个窗口）----------
+   左边：个人（收藏、我的组合）、预设（官方预设）、指标分区；右边是列表，每行 ☆ 收藏 + 名字 +「多线」「已添加」，点一行就加上或去掉。
+   搜索认中文名、英文代号、全拼和拼音首字母（例：布林 / boll / bulin / bld）。
+   录屏里的库有 125 个指标，这里只放面板真会画的这几样；勾选框一直留在页面里（按 [data-ind] 找得到），按分区和搜索只是藏起来。 */
+const IL_CATS = [['trend', '趋势与均线'], ['osc', '摆动与强弱'], ['volu', '量能与资金'], ['vola', '波动与通道'], ['panel', '本面板专用']];
+const IL = [
+  { k: 'ma', name: '移动均线', code: 'MA', par: '5, 10, 20, 60', cat: 'trend', multi: 1, py: 'yidongjunxian', ab: 'ydjx', tip: '主图上四条线：最近 5、10、20、60 根收盘价的平均' },
+  { k: 'ema', name: '指数均线', code: 'EMA', par: '12, 26', cat: 'trend', multi: 1, py: 'zhishujunxian', ab: 'zsjx', tip: '越近的收盘价分量越重的均线' },
+  { k: 'macd', name: '指数平滑异同移动平均线', code: 'MACD', par: '12, 26, 9', cat: 'trend', multi: 1, py: 'zhishupinghuayitongyidongpingjunxian', ab: 'zsphytydpjx', tip: '快慢两条均线的差；柱子 = 2 ×（DIF − DEA）' },
+  { k: 'rsi', name: '相对强弱指数', code: 'RSI', par: '14', cat: 'osc', py: 'xiangduiqiangruozhishu', ab: 'xdqrzs', tip: '0 到 100，常用参考线 30 / 50 / 70' },
+  { k: 'kdj', name: '随机指标', code: 'KDJ', par: '9, 3, 3', cat: 'osc', multi: 1, py: 'suijizhibiao', ab: 'sjzb', tip: 'K、D、J 三条线' },
+  { k: 'vol', name: '成交量', code: 'VOL', par: '5, 10', cat: 'volu', multi: 1, py: 'chengjiaoliang', ab: 'cjl', tip: '柱子是成交量，两条线是 5 日、10 日均量；蓝柱是地量日' },
+  { k: 'boll', name: '布林带', code: 'BOLL', par: '20, 2', cat: 'vola', multi: 1, py: 'bulindai', ab: 'bld', tip: '主图上三条线：中轨是 20 根均价，上下轨是中轨加减 2 个标准差' },
+  { k: 'atr', name: '真实波幅', code: 'ATR', par: '14', cat: 'vola', py: 'zhenshibofu', ab: 'zsbf', tip: '平均真实波幅：它平时一根 K 线上下晃多大' },
+  { k: 'marks', name: '四要素标记 ▲1–4', code: '', cat: 'panel', py: 'siyaosubiaoji', ab: 'sysbj', tip: '四要素各自成立的那一天，在 K 线旁边标 1–4' },
+  { k: 'pf', name: '持仓叠加（成本、行权价、归零线）', code: '', cat: 'panel', py: 'chicangdiejia', ab: 'ccdj', tip: '只是显示，不影响四要素证据的判定' },
+  { k: 'pfval', name: '估值参考线', code: '', cat: 'panel', py: 'guzhicankaoxian', ab: 'gzckx', tip: '离现价很远，打开会把图压扁' },
+  { k: 'live', name: '盘中实时（半透明 = 未收盘）', code: '', cat: 'panel', py: 'panzhongshishi', ab: 'pzss', tip: '今天常规时段的未收盘 K 线，半透明；只画图，不参与四要素判定' },
+];
+// 录屏里只看到「官方预设 4」，没打开过；这 4 组是按这块面板常看的东西配的
+const IL_PRESETS = [
+  { name: '四证看盘', keys: ['vol', 'macd'], tip: '成交量 + MACD（面板默认）' },
+  { name: '超买超卖', keys: ['vol', 'rsi', 'kdj'], tip: '成交量 + RSI + KDJ' },
+  { name: '看波动', keys: ['vol', 'boll', 'atr'], tip: '成交量 + 布林带 + ATR' },
+  { name: '看趋势', keys: ['ma', 'ema', 'vol', 'macd'], tip: '均线 MA + EMA + 成交量 + MACD' },
+];
+let ilSec = 'all';
+const ilCodes = keys => keys.map(k => (IL.find(t => t.k === k) || { code: k }).code || k).join(' + ');
+function ilMatch(t, q) {
+  q = q.trim().toLowerCase(); if (!q) return true;
+  return t.name.toLowerCase().indexOf(q) >= 0 || (!!t.code && t.code.toLowerCase().indexOf(q) >= 0) || t.py.indexOf(q) >= 0 || t.ab.indexOf(q) >= 0;
+}
+function ilRows() {
+  const fav = store.get('ind.fav', []);
+  $('#ilList').innerHTML = IL.map(t => '<div class="il-row" data-row="' + t.k + '" title="' + esc(t.tip) + '"><button class="il-fav' + (fav.indexOf(t.k) >= 0 ? ' on' : '') + '" data-ifav="' + t.k + '" title="收藏">☆</button>' +
+    '<label class="il-item"><input type="checkbox" data-ind="' + t.k + '"><b>' + esc(t.name) + '</b>' + (t.code ? '<small>' + t.code + (t.par ? '（' + t.par + '）' : '') + '</small>' : '') + '</label>' +
+    (t.multi ? '<span class="il-tag">多线</span>' : '') + '<span class="il-added">已添加</span></div>').join('');
+  $$('#ilList [data-ind]').forEach(c => { c.checked = !!S.ind[c.dataset.ind]; c.onchange = () => setInd(c.dataset.ind, c.checked); });
+}
+function ilSide() {
+  const fav = store.get('ind.fav', []), combos = store.get('ind.combos', []);
+  const item = (id, ico, label, n) => '<button data-sec="' + id + '" class="' + (ilSec === id ? 'on' : '') + '"><i>' + ico + '</i><span>' + label + '</span><em>' + n + '</em></button>';
+  $('#ilSide').innerHTML = '<div class="il-h">个人</div>' + item('fav', '☆', '收藏', fav.length) + item('combo', '↗', '我的组合', combos.length) +
+    '<div class="il-h">预设</div>' + item('preset', '▤', '官方预设', IL_PRESETS.length) +
+    '<div class="il-h">指标分区</div>' + item('all', '▦', '全部指标', IL.filter(t => t.cat !== 'panel').length) + IL_CATS.map(([id, label]) => item(id, '·', label, IL.filter(t => t.cat === id).length)).join('');
+}
+function ilExtra(kind) {
+  if (kind === 'preset') return IL_PRESETS.map((p, j) => '<div class="il-combo"><b>' + esc(p.name) + '</b><span>' + esc(p.tip) + '</span><button data-act="preset" data-j="' + j + '">用这组</button></div>').join('') +
+    '<div class="il-empty">录屏里只看到「官方预设 4」，没看到里面是什么；这 4 组是按这块面板常看的东西配的。</div>';
+  const combos = store.get('ind.combos', []), cur = CHART_IND.filter(k => S.ind[k]);
+  return '<button class="il-save" data-act="save"' + (cur.length ? '' : ' disabled') + '>把现在打开的 ' + cur.length + ' 个指标存成一个组合</button>' +
+    (combos.length ? combos.map((cb, j) => '<div class="il-combo"><b>' + esc(cb.name) + '</b><span>' + esc(ilCodes(cb.keys)) + '</span><button data-act="use" data-j="' + j + '">用这组</button><button data-act="del" data-j="' + j + '" title="删掉这个组合">✕</button></div>').join('')
+      : '<div class="il-empty">还没有组合。先把想看的指标打开，再点上面的按钮存下来。</div>');
+}
+function ilView() {
+  const q = $('#ilQ').value.trim(), fav = store.get('ind.fav', []);
+  const rowsOn = !!q || (ilSec !== 'combo' && ilSec !== 'preset');
+  const show = t => (q ? ilMatch(t, q) : ilSec === 'all' ? t.cat !== 'panel' : ilSec === 'fav' ? fav.indexOf(t.k) >= 0 : t.cat === ilSec);
+  let shown = 0;
+  $$('#ilList .il-row').forEach(r => { const t = IL.find(x => x.k === r.dataset.row), v = rowsOn && show(t); r.hidden = !v; if (v) shown++; r.classList.toggle('on', !!S.ind[t.k]); });
+  const name = q ? '搜索「' + q + '」' : { fav: '收藏', combo: '我的组合', preset: '官方预设', all: '全部指标' }[ilSec] || (IL_CATS.find(x => x[0] === ilSec) || ['', ''])[1];
+  $('#ilCap').textContent = name + (rowsOn ? ' · ' + shown : '');
+  $('#ilExtra').innerHTML = !rowsOn ? ilExtra(ilSec) : shown ? '' :
+    '<div class="il-empty">' + (q ? '没有找到。试试中文名、英文缩写、全拼或拼音首字母。' : ilSec === 'fav' ? '还没有收藏。点行首的 ☆ 收藏常用的指标。' : '这一类还没有。') + '</div>';
+}
+function ilSync() { $$('#ilList [data-ind]').forEach(c => { c.checked = !!S.ind[c.dataset.ind]; }); ilSide(); ilView(); }
+function setInd(k, on) {
+  S.ind[k] = on; store.set('ind', S.ind);
+  if (k === 'live') { applyLive(); renderLegend(); pollLive(); }
+  else if (/^(marks|pf|pfval)$/.test(k)) { candle.applyOptions({ autoscaleInfoProvider: scaleProvider }); S.rev++; }
+  else { noteSpan(); rebuildIndicators(); focusView(); renderLegend(); }
+  ilSync();
+}
+function setInds(keys) {          // 用组合或预设：八个图表指标照这一组开关；四要素标记、持仓叠加、盘中实时不动
+  CHART_IND.forEach(k => { S.ind[k] = keys.indexOf(k) >= 0; });
+  store.set('ind', S.ind); noteSpan(); rebuildIndicators(); focusView(); renderLegend(); ilSync();
+}
+function bindIndLib() {
+  ilRows(); ilSide(); ilView();
+  const open = () => { $('#indLib').hidden = false; ilSync(); setTimeout(() => $('#ilQ').focus(), 0); };
+  const close = () => { $('#indLib').hidden = true; };
+  $('#indBtn').onclick = e => { e.stopPropagation(); if ($('#indLib').hidden) open(); else close(); };
+  $('#ilClose').onclick = close;
+  $('#ilHelp').onclick = () => { $('#ilNote').hidden = !$('#ilNote').hidden; };
+  $('#indLib').addEventListener('click', e => { if (e.target.id === 'indLib') close(); });
+  $('#ilQ').addEventListener('input', ilView);
+  $('#ilSide').addEventListener('click', e => { const b = e.target.closest('[data-sec]'); if (!b) return; ilSec = b.dataset.sec; $('#ilQ').value = ''; ilSide(); ilView(); });
+  $('#ilList').addEventListener('click', e => {
+    const f = e.target.closest('[data-ifav]'); if (!f) return;
+    const fav = store.get('ind.fav', []), k = f.dataset.ifav, j = fav.indexOf(k);
+    if (j >= 0) fav.splice(j, 1); else fav.push(k);
+    store.set('ind.fav', fav); f.classList.toggle('on', j < 0); ilSide(); ilView();
+  });
+  $('#ilExtra').addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const combos = store.get('ind.combos', []), j = Number(b.dataset.j);
+    if (b.dataset.act === 'save') { const keys = CHART_IND.filter(k => S.ind[k]); if (!keys.length) return; combos.push({ name: '组合 ' + (combos.length + 1), keys }); store.set('ind.combos', combos); toast('存好了：' + ilCodes(keys)); }
+    else if (b.dataset.act === 'del') { combos.splice(j, 1); store.set('ind.combos', combos); }
+    else if (b.dataset.act === 'use' && combos[j]) { setInds(combos[j].keys); toast('换成了「' + combos[j].name + '」：' + ilCodes(combos[j].keys)); }
+    else if (b.dataset.act === 'preset' && IL_PRESETS[j]) { setInds(IL_PRESETS[j].keys); toast('换成了官方预设「' + IL_PRESETS[j].name + '」：' + ilCodes(IL_PRESETS[j].keys)); }
+    ilSide(); ilView();
+  });
+}
 function bind() {
   ov = $('#overlay'); ctx = ov.getContext('2d');
   ov.addEventListener('mousemove', e => { if (S.tool !== 'cursor') { S.cur = ptFromEvent(e); S.rev++; } });
@@ -1126,20 +1316,18 @@ function bind() {
     $('#textBox').hidden = true;
     if (S.tool !== 'cursor') setTool('cursor');
   });
-  $('#indBtn').onclick = e => { e.stopPropagation(); $('#indPop').hidden = !$('#indPop').hidden; };
-  document.addEventListener('click', e => { if (!e.target.closest('#indMenu')) $('#indPop').hidden = true; });
-  $$('#indPop input').forEach(c => {
-    c.checked = !!S.ind[c.dataset.ind];
-    c.onchange = () => { S.ind[c.dataset.ind] = c.checked; store.set('ind', S.ind); if (c.dataset.ind === 'live') { applyLive(); renderLegend(); pollLive(); } else if (/^(marks|pf|pfval)$/.test(c.dataset.ind)) { candle.applyOptions({ autoscaleInfoProvider: scaleProvider }); S.rev++; } else { noteSpan(); rebuildIndicators(); focusView(); renderLegend(); } };
-  });
+  bindIndLib();
   $$('#viewSeg button').forEach(b => { b.onclick = () => setView(b.dataset.view); });
   $$('#tfSeg [data-tf]').forEach(b => { b.onclick = () => setTf(b.dataset.tf); });
   $('#dataDate').onclick = () => { const lrf = S.meta && S.meta.last_refresh_file; if (lrf) showRefreshFile(lrf); };
   $('#replayBtn').onclick = () => setReplay(!S.replayOn);
-  $('#rpRange').addEventListener('input', e => setAsof(Number(e.target.value)));
-  $('#rpPrev').onclick = () => setAsof(S.asof - 1);
-  $('#rpNext').onclick = () => setAsof(S.asof + 1);
-  $('#rpDate').addEventListener('change', e => { if (e.target.value) setAsof(indexAt(e.target.value)); });
+  $('#rpRange').addEventListener('input', e => { stopPlay(); setAsof(Number(e.target.value)); });
+  $('#rpPrev').onclick = () => { stopPlay(); setAsof(S.asof - 1); };
+  $('#rpNext').onclick = () => { stopPlay(); setAsof(S.asof + 1); };
+  $('#rpPlay').onclick = () => (playTimer ? stopPlay() : startPlay());
+  $('#rpSpeed').value = String(store.get('rpSpeed', 500));
+  $('#rpSpeed').addEventListener('change', e => store.set('rpSpeed', Number(e.target.value)));
+  $('#rpDate').addEventListener('change', e => { if (e.target.value) { stopPlay(); setAsof(indexAt(e.target.value)); } });
   $('#rpExit').onclick = () => setReplay(false);
   $('#aiBtn').onclick = () => { S.sideOpen = !S.sideOpen; store.set('side', S.sideOpen); renderTop(); syncUrl(); };
   $('#sideClose').onclick = () => { S.sideOpen = false; store.set('side', false); renderTop(); syncUrl(); };
@@ -1171,7 +1359,7 @@ function bind() {
     api, toast, esc, S, stateFresh: () => !!stateFresh(), asofDate, model: () => window.FEQuant.model(), profile: () => window.FEQuant.profile(), resized: () => { setTimeout(() => tick(true), 0); },
     setTab: n => window.FEQuant.setTab(n), tab: () => window.FEQuant.tab(), sideOpen: () => S.sideOpen,
     flashEvidence: k => flashStep(k, '', 'learn' + k, [], false),
-    flashPane: which => { const on = which === 'vol' ? S.ind.vol : S.ind.macd; if (on) flashPane(which === 'vol' ? ind.volPane : ind.macdPane); else toast('这排副图现在是关着的，在“指标”里打开就能看到。'); },
+    flashPane: which => { const on = which === 'vol' ? S.ind.vol : S.ind.macd; if (on) flashPane(which === 'vol' ? ind.volPane : ind.macdPane); else toast('这排副图现在是关着的，在顶栏「技术指标」里打开就能看到。'); },
     openSide,
     store, aiEnabled: () => !!(S.meta && S.meta.ai && S.meta.ai.enabled), aiReason: () => (S.meta && S.meta.ai && S.meta.ai.reason) || '',
   });
@@ -1181,10 +1369,11 @@ function bind() {
   $('#evidence').addEventListener('click', e => { if (e.target.closest('.ev-head')) { S.evFold = !S.evFold; store.set('evFold', S.evFold); $('#evidence').classList.toggle('fold', S.evFold); noteSpan(); focusView(); } });
   document.addEventListener('keydown', e => {
     const typing = /^(INPUT|TEXTAREA)$/.test(e.target.tagName) && e.target.type !== 'range';
-    if (e.key === 'Escape') { $('#modal').hidden = true; if (S.tool !== 'cursor') setTool('cursor'); else if (S.selected >= 0) { S.selected = -1; S.rev++; } return; }
+    if (e.key === 'Escape') { $('#modal').hidden = true; $('#indLib').hidden = true; if (S.tool !== 'cursor') setTool('cursor'); else if (S.selected >= 0) { S.selected = -1; S.rev++; } return; }
     if (typing) return;
     if ((e.key === 'Delete' || e.key === 'Backspace') && S.selected >= 0) { e.preventDefault(); deleteSelected(); }
-    if (S.replayOn && e.target.type !== 'range') { if (e.key === 'ArrowLeft') { e.preventDefault(); setAsof(S.asof - 1); } if (e.key === 'ArrowRight') { e.preventDefault(); setAsof(S.asof + 1); } }
+    if (S.replayOn && e.target.type !== 'range') { if (e.key === 'ArrowLeft') { e.preventDefault(); stopPlay(); setAsof(S.asof - 1); } if (e.key === 'ArrowRight') { e.preventDefault(); stopPlay(); setAsof(S.asof + 1); } }
+    if (S.replayOn && e.code === 'Space' && !/^(BUTTON|SELECT)$/.test(e.target.tagName)) { e.preventDefault(); if (playTimer) stopPlay(); else startPlay(); }
   });
 }
 
@@ -1204,7 +1393,8 @@ async function boot() {
   pollLive();
   requestAnimationFrame(loop);
   window.__fe = { S, chart: () => chart, tick: () => tick(true), setView, pollPortfolio, query: q, live: () => liveCandle,
-    setLive: r => { S.liveFrozen = true; clearTimeout(liveTimer); S.live = r; applyLive(); renderLegend(); } };     // 调试和自检用
+    setLive: r => { S.liveFrozen = true; clearTimeout(liveTimer); S.live = r; applyLive(); renderLegend(); },     // 调试和自检用
+    avwapBands, avwapOf: d => manualAvwap(d), playing: () => !!playTimer, startPlay, stopPlay, mav: () => MAV, series: () => ind.series.length };
   if (q.get('narr')) {                    // ?narr=1：打开页面就播放解说（截图用）
     const skip = q.get('narr') === 'skip'; if (skip) document.body.classList.add('noanim');
     const fin = () => { if (window.FENarrate.current()) window.FENarrate.finish(); else setTimeout(fin, 100); };

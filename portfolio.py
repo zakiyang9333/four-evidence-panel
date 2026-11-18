@@ -18,9 +18,11 @@ import subprocess
 import sys
 import threading
 
+import mine
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = 'portfolio_state.json'
-CHART_TICKERS = ('SPCX', 'NVDA', 'QQQ')          # 有 K 线数据、能做四证检查的标的
+CHART_TICKERS = ('SPCX', 'NVDA', 'QQQ', 'JOBY')  # 有 K 线数据、能做四证检查的标的（JOBY 2026-11-18 加入）
 STALE_HOURS = 24
 VAL_LABELS = {'V4_base': 'V4 Base', 'sotp': 'SOTP', 'V4_bull': 'V4 Bull', 'mos30': '30% 安全边际价'}
 TP_KEYS = ('take_profit', 'take_profit_price', 'tp')
@@ -140,15 +142,16 @@ def four_checks(tickers):
 
 
 def overlays(st):
-    """Horizontal lines for the chart, per ticker: {'SPCX': {'lines': [...], 'valuation': [...]}}. Display only."""
-    out = {}
+    """Horizontal lines for the chart, per ticker: {'SPCX': {'lines': [...], 'valuation': [...]}}. Display only.
+    Positions he marked as ignored (mine.ignored) are left out."""
+    out, skip = {}, mine.ignored()
 
     def add(t, group, price, label, kind, est=False):
         if t in CHART_TICKERS and num(price) is not None:
             out.setdefault(t, dict(lines=[], valuation=[]))[group].append(dict(price=price, label=label, kind=kind, est=est))
 
     for p in st.get('positions') or []:
-        if not isinstance(p, dict):
+        if not isinstance(p, dict) or mine.pos_key(p) in skip:
             continue
         sym, typ = str(p.get('symbol') or '').upper(), p.get('type')
         if typ == 'stock':
@@ -166,7 +169,7 @@ def overlays(st):
             if k.startswith(t + '_'):
                 add(t, 'valuation', v, '估值参考 ' + VAL_LABELS.get(k[len(t) + 1:], k[len(t) + 1:]), 'valuation')
     for a in st.get('other_accounts') or []:
-        if not isinstance(a, dict):
+        if not isinstance(a, dict) or mine.pos_key(a) in skip:
             continue
         t = chart_ticker(a)
         who = f"{a.get('broker') or '其它账户'}{'空单' if a.get('side_dir') == 'short' else '多单' if a.get('side_dir') == 'long' else '仓位'}"
@@ -183,14 +186,14 @@ def relevant_positions(ticker, now=None):
     st, err = read_state()
     if err or ticker not in CHART_TICKERS:
         return None
-    rows = []
+    rows, skip = [], mine.ignored()
     for p in st.get('positions') or []:
-        if isinstance(p, dict) and chart_ticker(p) == ticker:
+        if isinstance(p, dict) and chart_ticker(p) == ticker and mine.pos_key(p) not in skip:
             row = {k: p[k] for k in ('symbol', 'type', 'qty', 'avg_cost', 'side', 'underlying', 'strike', 'expiry', 'note') if k in p}
             row['r_definition'] = next((p[k] for k in R_KEYS if k in p), None)      # 文件没给就是 None，不编
             rows.append(row)
     for a in st.get('other_accounts') or []:
-        if isinstance(a, dict) and chart_ticker(a) == ticker:
+        if isinstance(a, dict) and chart_ticker(a) == ticker and mine.pos_key(a) not in skip:
             row = {k: a[k] for k in ('broker', 'symbol', 'type', 'side_dir', 'qty', 'entry', 'leverage', 'side', 'note') if k in a}
             row['r_definition'] = next((a[k] for k in R_KEYS if k in a), None)
             rows.append(row)
@@ -198,6 +201,45 @@ def relevant_positions(ticker, now=None):
         return None
     age = age_hours(st.get('asof_taipei'), now)
     return dict(positions=rows, positions_asof=st.get('asof_taipei'), positions_stale=bool(age is None or age > STALE_HOURS))
+
+
+LINE_LABELS = {'bp_zero_est': '归零线（估算）', 'bp_zero_after_1_more_buyback_est': '再回购一次后的归零线（估算）', 'minus10pct_buffer': '−10% 缓冲线（估算）'}
+
+
+def line_label(key):
+    """A readable name for one line field. Scenario lines (bp_zero_if_xxx_est) are read from the field name, not written out here."""
+    if key in LINE_LABELS:
+        return LINE_LABELS[key]
+    m = re.match(r'^bp_zero_if_(.+?)(_est)?$', key)
+    if m:
+        return '归零线（情景：' + m.group(1).replace('_', ' ') + ('，估算）' if m.group(2) else '）')
+    return key.replace('_', ' ')
+
+
+def order_ticker(o):
+    """Which chart ticker an open order belongs to: the first word of its symbol ('NVDA PUT（…）' → NVDA)."""
+    head = re.split(r'[\s（(]', str(o.get('symbol') or '').upper().strip(), maxsplit=1)[0]
+    return head if head in CHART_TICKERS else None
+
+
+def chat_extras(ticker):
+    """What the AI chat may see about this one ticker besides the positions: his own lines (归零线, −10% 缓冲 …), valuation
+    references, open orders on it, and the checklist items that name it. Nothing account-wide (cash, NAV, other tickers'
+    lines). None when there is nothing for this ticker."""
+    st, err = read_state()
+    if err or ticker not in CHART_TICKERS:
+        return None
+    pre = ticker + '_'
+    lines = [dict(name=line_label(k[len(pre):]), price=v) for k, v in (st.get('lines') or {}).items() if k.startswith(pre) and num(v) is not None]
+    vals = [dict(name=VAL_LABELS.get(k[len(pre):], k[len(pre):]), price=v) for k, v in (st.get('valuation_refs') or {}).items() if k.startswith(pre) and num(v) is not None]
+    skip = mine.ignored()
+    orders = [{k: o[k] for k in ('symbol', 'side', 'qty', 'limit', 'status') if k in o} for o in ((st.get('account') or {}).get('open_orders') or [])
+              if isinstance(o, dict) and order_ticker(o) == ticker and mine.pos_key(o) not in skip]
+    checks = [{k: x[k] for k in ('item', 'flag', 'text') if k in x} for x in st.get('inversion_checklist') or []
+              if isinstance(x, dict) and ticker in str(x.get('item', '')) + str(x.get('text', ''))]
+    if not (lines or vals or orders or checks):
+        return None
+    return dict(my_lines=lines, lines_note=(st.get('lines') or {}).get('label'), valuation_refs=vals, open_orders=orders, checklist=checks)
 
 
 def payload(now=None):
@@ -215,11 +257,12 @@ def payload(now=None):
     except OSError:
         updated = None
     age = age_hours(st.get('asof_taipei'), now)
+    skip = mine.ignored()
 
     def enrich(p, with_pnl):
         if not isinstance(p, dict):
             return None
-        row = dict(p, check_ticker=chart_ticker(p))
+        row = dict(p, check_ticker=chart_ticker(p), key=mine.pos_key(p), ignored=mine.pos_key(p) in skip)      # 忽略的：灰着显示，不进 AI、不画到图上
         if with_pnl:
             given = next((num(p.get(k)) for k in ('pnl', 'unrealized_pnl') if num(p.get(k)) is not None), None)
             q, c, l = num(p.get('qty')), num(p.get('avg_cost')), num(p.get('last'))

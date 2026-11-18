@@ -1,4 +1,4 @@
-/* 量化终端：三只标的 × 三个模型 × 做多/做空，现在各是什么状态。数据全部来自 /api/quant/scan（和「AI 量化」窗口同一段代码）。
+/* 量化终端：每只标的 × 每个模型 × 做多/做空，现在各是什么状态。数据全部来自 /api/quant/scan（和「AI 量化」窗口同一段代码）。
    这里只显示，不算任何规则；不接券商，不做交易。文字用 textContent 写入。 */
 (() => {
   'use strict';
@@ -65,7 +65,7 @@
       T.tickers.forEach(t => ['long', 'short'].forEach(s => { const c = el('td'); c.appendChild(T.cells.some(x => x.ticker === t) ? cellNode(find(t, m.key, s)) : el('div', 'cell wait-load', '计算中…')); tr.appendChild(c); }));
       g.appendChild(tr);
     });
-    // 历史触发汇总：每个模型、每个方向，三只标的加起来
+    // 历史触发汇总：每个模型、每个方向，所有标的加起来
     const sum = $('#tSum'); sum.textContent = '';
     const head = el('tr'); ['模型', '方向', '出现次数', '先到第一目标', '先越过止损', '到期 / 两头都没到', '往后看', '盈亏比（中位）'].forEach(x => head.appendChild(el('th', '', x))); sum.appendChild(head);
     T.models.forEach(m => ['long', 'short'].forEach(s => {

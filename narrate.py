@@ -160,10 +160,13 @@ def card(f, backtest=None):
     aw = f['e4']['avwap']
     zone = [aw, round(aw * 1.02, 2)] if (f['all4'] and aw) else None        # four_evidence_check.py：成本线到 +2%，只在 4/4 时给
     foot = FOOT.format(n=backtest['n'], p=backtest['p']) if backtest else '规则回测证据不足，仅供观察'
+    # 四项没齐：引擎照样算出止损、前高这些结构位（图上的「自动画」和「依据」里还看得到），但卡片上不把它们当交易价位给出去
+    ready = bool(f['all4'])
+    tgt = lv['target'] if ready and lv['target_usable'] else None
     return dict(verdict=verdict, code=f['conclusion_code'], direction='做多', horizon=f"日线 · 最长持有 {lv['max_hold_bars']} 根",
-                reason=f['conclusion'], price=f['close'], entry_zone=zone, stop=lv['stop'],
-                target=lv['target'] if lv['target_usable'] else None, rr=lv['rr'],
-                lines=[['建仓区', '压着成本线', aw], ['止损', '垫在新低下面', lv['stop']], ['目标', '前面高点', lv['target'] if lv['target_usable'] else None]],
+                reason=f['conclusion'], price=f['close'], entry_zone=zone, stop=lv['stop'] if ready else None, target=tgt, rr=lv['rr'] if ready else None,
+                lines=[['建仓区', '压着成本线' if ready else '条件没齐，不给', aw if ready else None], ['止损', '垫在新低下面' if ready else '条件没齐，不给', lv['stop'] if ready else None],
+                       ['目标', '前面高点' if ready else '条件没齐，不给', tgt]],
                 footer=foot)
 
 

@@ -75,6 +75,8 @@ class Loader(unittest.TestCase):
             self.assertEqual(by[sym], 'SPCX', sym)
         for sym in X['no_chart']:
             self.assertIsNone(by[sym])                                          # 没有 K 线数据：显示 —
+        for sym, t in X.get('own_chart', {}).items():
+            self.assertEqual(by[sym], t, sym)                                   # 2026-11-18 起 JOBY 有了自己的 K 线
         self.assertEqual(p['other_accounts'][0]['check_ticker'], 'NVDA')
         ref = four_evidence_check.check('SPCX')                                 # the column is whatever the script says
         self.assertEqual((p['checks']['SPCX']['score'], p['checks']['SPCX']['armed']), (ref['score'], ref['armed']))

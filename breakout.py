@@ -31,7 +31,7 @@ import bisect
 import numpy as np
 
 import houshou as hs
-from houshou import up, dn, rel, r2, pct, vol_text
+from houshou import up, dn, rel, r2, px, pct, vol_text
 
 VERSION = 'breakout-0.2'
 NAME = '破位反抽 3.1'
@@ -71,9 +71,9 @@ WORDS = dict(
 
 VERDICT_TEXT = dict(
     short={'条件齐': '破位反抽条件齐了（未回测）', '等受阻': '反抽到位，等受阻', '等反抽': '破位了，等反抽', '不追': '不追空 · 离破位处太远', '等破位': '还没破位',
-           '不适用': '这套清单用不上', '已失效': '结构已失效'},
+           '不适用': '这套清单用不上', '已失效': '结构已失效', hs.TOO_FINE: '价位太细，不给价位'},
     long={'条件齐': '突破回踩条件齐了（未回测）', '等受阻': '回踩到位，等企稳', '等反抽': '突破了，等回踩', '不追': '不追多 · 离突破处太远', '等破位': '还没突破',
-          '不适用': '这套清单用不上', '已失效': '结构已失效'})
+          '不适用': '这套清单用不上', '已失效': '结构已失效', hs.TOO_FINE: '价位太细，不给价位'})
 
 
 def _tol(P):
@@ -114,7 +114,7 @@ def _core(P, j):
     pi, pat = P['pi'], P['pat']
     s, side = P['s'], P['side']
     W = dict(WORDS[side], avg=P['W']['avg'])
-    R = lambda x: r2(s * x)
+    R = lambda x: px(s * x)
     span = lambda a, b: (R(a), R(b)) if s == 1 else (R(b), R(a))
     out = dict(phase='无结构', verdict='不适用', list=None, checks=[], missing=[], next_needs=[], note='', level=None, brk=None, extreme=None, pull=None,
                box=None, dist_pct=None, zone=None, mid=None, stop=None, t1=None, t2=None, t2_note='', rr=None, _b=None, _ready=False, _stop=None)
@@ -212,8 +212,16 @@ def _core(P, j):
     k3 = dict(k='K3', name=W['k3'], ok=bool(k3ok), why=why3)
     checks = [k1, k2, k3]
 
+    bad = ''
+    if k3ok:            # 三项齐了：先看价位在显示的位数下分不分得开（低价区两位小数会把入场和止损挤成同一个数）
+        z1, z2 = lv, up(lv, EST['zone'])
+        mid = (z1 + z2) / 2
+        stop = dn(min(pl, lv), EST['stop'])
+        bad = hs.plan_check(s, mid, stop, far_p)
     need = []
-    if k3ok:
+    if k3ok and bad:
+        verdict = hs.TOO_FINE
+    elif k3ok:
         verdict = '条件齐'
     elif not k1['ok']:
         verdict = '等反抽' if not k2ok else '等受阻'
@@ -228,12 +236,11 @@ def _core(P, j):
         if dist > EST['far']:
             need.append(f'现价离{W["brk"]}处已经 {pct(dist)}%，超过 {int(EST["far"] * 100)}%：按规则不追，等它{W["back"]}')
     need.append(f'收盘回到 {R(dn(lv, EST["fail"]))} {W["inside"]}（{W["brk"]}处{W["inside"]} {int(EST["fail"] * 100)}%）就是{W["fake"]}，这个结构作废')
-    out.update(phase=(W['back'] + '中') if pl_i is not None else (W['brk'] + '后'), verdict=verdict, checks=checks, next_needs=need,
-               missing=[x['name'] + '：' + x['why'] for x in checks if not x['ok']], _ready=bool(k3ok))
-    if k3ok:
-        z1, z2 = lv, up(lv, EST['zone'])
-        mid = (z1 + z2) / 2
-        stop = dn(min(pl, lv), EST['stop'])
+    out.update(phase=(W['back'] + '中') if pl_i is not None else (W['brk'] + '后'), verdict=verdict, checks=checks, next_needs=need if not bad else [],
+               missing=[x['name'] + '：' + x['why'] for x in checks if not x['ok']], _ready=bool(k3ok and not bad))
+    if bad:
+        out['note'] = f'清单三项都成立，但{bad}。这一次不算条件齐，也不给价位和盈亏比。'
+    if k3ok and not bad:
         t2 = pl + VIDEO['t2_ext'] * (far_p - box_far)          # 按这一跌再量一遍：从反抽点起，再走一次“箱体另一头到破位后极值”那么远
         t2_ok = t2 > far_p
         out.update(zone=list(span(z1, z2)), mid=R(mid), stop=R(stop), t1=R(far_p), t2=R(t2) if t2_ok else None,
@@ -254,7 +261,7 @@ def evaluate(P, j):
                 x = next((x for x in range(q + 1, j + 1) if P['c'][x] < rq['_stop']), None)
                 if x is not None:
                     r.update(phase='已失效', verdict='已失效', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[], _ready=False,
-                             note=f'{P["d"][q]} 条件齐过一次，{P["d"][x]} 收盘越过了当时的止损 {r2(P["s"] * rq["_stop"])}，这个结构作废。')
+                             note=f'{P["d"][q]} 条件齐过一次，{P["d"][x]} 收盘越过了当时的止损 {px(P["s"] * rq["_stop"])}，这个结构作废。')
                 break
     return r
 

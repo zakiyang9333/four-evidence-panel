@@ -84,8 +84,9 @@ def _long(P, j):
         out.update(verdict='跑', verdict_text='五浪到 0.618 + 天量：跑', state='avoid', text=f'{d[climax_bar]} 五浪走到 0.618 扩展位 {R(P, ext)}，还放出了天量。按规则这是庄在出货，不跟了。')
     elif not k2:
         out.update(verdict='认错', verdict_text='四浪碰了一浪顶，先认错', state='na', text='四浪跌进了一浪的地盘，这一段数浪数错了。按规则先认错，清单不再适用。')
-    elif cj >= ext:
-        out.update(verdict='不追', verdict_text='到了扩展位，不追', state='avoid', text=f'价格已经到 0.618 扩展位 {R(P, ext)}，没见天量，也不再追。')
+    elif top >= ext:            # 五浪到过扩展位（今天收回到下面也算）：清单第三项不成立，和“到了扩展位”一样不追
+        out.update(verdict='不追', verdict_text='到了扩展位，不追', state='avoid',
+                   text=f'五浪已经到过 0.618 扩展位 {R(P, ext)}（最高 {R(P, top)}），没见天量，也不再追。' if cj < ext else f'价格已经到 0.618 扩展位 {R(P, ext)}，没见天量，也不再追。')
     else:
         a = pt.atr(P, j)
         out.update(qm.plan(P, cj - EST['zone_atr'] * a, cj + EST['zone_atr'] * a, dn(p1, EST['stop']), ext, p4 + EST['t2_ext'] * (p3 - p0), '1.0 倍一到三浪【估算】'))

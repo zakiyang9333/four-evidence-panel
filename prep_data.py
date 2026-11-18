@@ -20,13 +20,13 @@ except ImportError:                      # pragma: no cover  (python < 3.9)
     ZoneInfo = None
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-TICKERS = ('NVDA', 'QQQ', 'SPCX')
+TICKERS = ('NVDA', 'QQQ', 'SPCX', 'JOBY')
 MIRROR = {'NVDA': ['https://raw.githubusercontent.com/wudn9922/my-stock-screener/HEAD/data/NVDA.csv',
                    'https://raw.githubusercontent.com/Stell0/financealerts/HEAD/data/NVDA.csv',
                    'https://raw.githubusercontent.com/yennanliu/finance_data/HEAD/data/prices/nvda.csv'],
           'QQQ': ['https://raw.githubusercontent.com/yennanliu/finance_data/HEAD/data/prices/qqq.csv'],
-          'SPCX': []}
-YAHOO = {'NVDA': 'NVDA', 'QQQ': 'QQQ', 'SPCX': 'SPCX'}
+          'SPCX': [], 'JOBY': []}          # JOBY：GitHub 上的镜像都没有它，只有 Yahoo
+YAHOO = {'NVDA': 'NVDA', 'QQQ': 'QQQ', 'SPCX': 'SPCX', 'JOBY': 'JOBY'}
 TOL = 0.005            # two closes "agree" when they differ by at most 0.5%
 OVERLAP_DAYS = 30      # stored dates a source is checked against before it may append
 OVERLAP_MIN = 5        # ... and it must cover at least this many of them

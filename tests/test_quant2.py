@@ -382,7 +382,8 @@ class Api(unittest.TestCase):
         self.assertIn('MA20', a['score']['parts'][0]['why']); self.assertIn('MA60', b['score']['parts'][0]['why']); self.assertIn('MA120', c['score']['parts'][0]['why'])
         self.assertIn('近 60 根', b['score']['parts'][1]['why'])
         self.assertEqual(a['signal']['checks'], b['signal']['checks'])             # 清单本身不随周期变：规则是同一套
-        self.assertEqual(self.q('QQQ', model='breakout', side='short', hz=7)['horizon']['n'], 20)      # 不认识的值回到 20
+        bad = self.get('/api/quant?ticker=QQQ&model=breakout&side=short&hz=7', 400)                   # 不认识的值：400，写明可选什么（以前悄悄变成 20）
+        self.assertEqual((bad['param'], bad['value'], bad['allowed']), ('hz', '7', ['20', '60', '120']))
         self.assertEqual(a['card']['tags'][1], '短线 · 20 日'); self.assertEqual(b['card']['tags'][1], '中线 · 60 日')
 
     def test_position_modes_only_change_words(self):

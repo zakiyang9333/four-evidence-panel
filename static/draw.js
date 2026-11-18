@@ -1,5 +1,7 @@
-/* 左边的画线工具栏，照录屏（TradingVane）的排法：光标；线 / 斐波那契 / 形态 / 仓位与测量四组，每组一个弹出菜单；
-   画笔、文字、表情、尺子、放大、磁铁、锁定、隐藏、同步、删除；最下面是收藏。
+/* 左边的画线工具栏，照录屏（TradingVane）的排法：光标；线 / 斐波那契 / 形态 / 仓位与测量 / 笔刷五组，每组一个弹出菜单；
+   文字、表情、尺子、放大、磁铁、锁定、隐藏、同步、删除；最下面是收藏。
+   笔刷组照录屏 11 的 00:51：笔刷、荧光笔；箭头标记、箭头、向上箭头、向下箭头；矩形、旋转矩形、路径、圆、椭圆、折线、三角形、弧形。
+   弧形下面被字幕挡住了，曲线、双曲线是照常见看图软件的这一组补上的。
    这里只管画：点几下、存下来、按 K 线日期和价格画出来。不做任何规则判定，也不下单（多头 / 空头仓位只是画一个盈亏框）。
    原来就有的扇形、水平线、锚定 VWAP、箭头文字仍由 app.js 画（data-tool 名字不变），新工具都在这里。 */
 window.FEDraw = (() => {
@@ -26,6 +28,9 @@ window.FEDraw = (() => {
     ruler: 'M3 9h18v6H3zM7 9v3M11 9v3M15 9v3M19 9v3', zoom: 'M10 10m-6 0a6 6 0 1 0 12 0a6 6 0 1 0-12 0M15 15l5 5M10 7v6M7 10h6', magnet: 'M6 4v8a6 6 0 0 0 12 0V4h-4v8a2 2 0 0 1-4 0V4z',
     lock: 'M6 11h12v9H6zM9 11V7a3 3 0 0 1 6 0', eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0', link: 'M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1',
     trash: 'M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13', star: 'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z', auto: 'M4 5l16 5M4 5l16 9M4 5l16 13',
+    hilite: 'M4 20h8M7 16l8-8 3 3-8 8H7z', arrowmk: 'M4 14h9v4l7-6-7-6v4H4z', arrowln: 'M5 19L18 6M18 6h-7M18 6v7', arrowup: 'M12 4l6 7h-4v9h-4v-9H6z', arrowdn: 'M12 20l6-7h-4V4h-4v9H6z',
+    rect: 'M4 6h16v12H4z', rrect: 'M7 3l14 6-5 12L2 15z', path: 'M4 18l5-6 4 3 7-9M20 6h-5M20 6v5', circ: 'M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0', ellipse: 'M12 12m-9 0a9 6 0 1 0 18 0a9 6 0 1 0-18 0',
+    polyline: 'M4 18l4-10 7 3 5 7z', tri3: 'M12 4l9 16H3z', arcsh: 'M4 18Q12 2 20 18z', curve: 'M4 18Q12 2 20 18', dcurve: 'M3 16C7 4 11 4 12 12S17 20 21 8',
   };
   const svg = k => '<svg viewBox="0 0 24 24"><path d="' + (I[k] || I.trend) + '"/></svg>';
 
@@ -49,10 +54,17 @@ window.FEDraw = (() => {
       ['', [['long', '多头仓位', 2], ['short', '空头仓位', 2], ['forecast', '仓位预测', 2], ['bars', 'K线形态', 3], ['ghost', '模拟K线', 2], ['sector', '扇形', 3]]],
       ['基于成交量', [['avwap', '锚定VWAP', 1], ['vp', '固定范围成交量分布图', 2], ['avp', '锚定成交量分布图', 1]]],
       ['测量', [['prange', '价格范围', 2], ['drange', '日期范围', 2], ['dprange', '日期和价格范围', 2]]]] },
+    // n = 0：按住拖着画；n = -1：一下一下点，双击或回车结束
+    { id: 'brush', icon: 'brush', label: '笔刷', sec: [
+      ['笔刷', [['brush', '笔刷', 0], ['hilite', '荧光笔', 0]]],
+      ['箭头', [['arrowmk', '箭头标记', 2], ['arrowln', '箭头', 2], ['arrowup', '向上箭头', 1], ['arrowdn', '向下箭头', 1]]],
+      ['形状', [['rect', '矩形', 2, 'Alt+Shift+R'], ['rrect', '旋转矩形', 3], ['path', '路径', -1], ['circ', '圆', 2], ['ellipse', '椭圆', 2], ['polyline', '折线', -1], ['tri3', '三角形', 3],
+              ['arcsh', '弧形', 3], ['curve', '曲线', 3], ['dcurve', '双曲线', 4]]]] },
   ];
   const TOOLS = {};
   G.forEach(g => g.sec.forEach(s => s[1].forEach(t => { TOOLS[t[0]] = { key: t[0], name: t[1], n: t[2], kbd: t[3] || '', group: g.id }; })));
-  Object.assign(TOOLS, { brush: { key: 'brush', name: '画笔', n: 0 }, text: { key: 'text', name: '文字', n: 1, group: 'text' }, arrow: { key: 'arrow', name: '箭头文字', n: 2, group: 'text' },
+  const DRAG = { brush: 1, hilite: 1 };
+  Object.assign(TOOLS, { text: { key: 'text', name: '文字', n: 1, group: 'text' }, arrow: { key: 'arrow', name: '箭头文字', n: 2, group: 'text' },
     emoji: { key: 'emoji', name: '表情', n: 1 }, ruler: { key: 'ruler', name: '尺子', n: 2 }, zoom: { key: 'zoom', name: '放大', n: 2 } });
   const ICON = { modschiff: 'schiff', inside: 'pitchfork', fibtt: 'fibtime', fibcircle: 'circle', fibspiral: 'spiral', fibarc: 'arc', fibwedge: 'wedge', gannfix: 'gannsq', cypher: 'xabcd', tripat: 'tri',
     ew5: 'wave', ewabc: 'abc', ewtri: 'wave', ewwxy: 'abc', ewwxyxz: 'wave' };
@@ -72,8 +84,7 @@ window.FEDraw = (() => {
         g.sec.map(s => (s[0] ? '<div class="tb-sec">' + s[0] + '</div>' : '') + s[1].map(t => '<div class="tb-row"><button class="tb-item" data-tool="' + t[0] + '">' + icon(t[0]) + '<b>' + t[1] + '</b>' +
           (t[3] ? '<kbd>' + t[3] + '</kbd>' : '') + '</button><button class="tb-fav' + (fav.indexOf(t[0]) >= 0 ? ' on' : '') + '" data-fav="' + t[0] + '" title="收藏">☆</button></div>').join('')).join('') + '</div></div>';
     });
-    h += btn('data-tool="brush"', 'brush', '画笔') +
-      '<div class="tb-group" data-group="text"><button class="tb-main" data-tool="' + (last.text === 'arrow' ? 'arrow' : 'text') + '" data-main="text" title="' + (last.text === 'arrow' ? '箭头文字' : '文字') + '">' +
+    h += '<div class="tb-group" data-group="text"><button class="tb-main" data-tool="' + (last.text === 'arrow' ? 'arrow' : 'text') + '" data-main="text" title="' + (last.text === 'arrow' ? '箭头文字' : '文字') + '">' +
       svg(last.text === 'arrow' ? 'arrow' : 'text') + '<span>' + (last.text === 'arrow' ? '箭头文字' : '文字') + '</span></button><button class="tb-more" data-open="text" title="文字工具">‹</button>' +
       '<div class="tb-menu" data-menu="text" hidden><div class="tb-sec">文字</div><div class="tb-row"><button class="tb-item" data-tool="text">' + svg('text') + '<b>文字</b></button></div>' +
       '<div class="tb-row"><button class="tb-item" data-tool="arrow">' + svg('arrow') + '<b>箭头文字</b></button></div></div></div>' +
@@ -295,7 +306,66 @@ window.FEDraw = (() => {
     brush: (P, col) => poly(P, col, 2),
     text: (P, col, q, d) => { const [a] = P; G2.font = '600 13px -apple-system,"PingFang SC",sans-serif'; G2.fillStyle = col === SEL ? SEL : '#fde047'; G2.textAlign = 'left'; G2.textBaseline = 'middle'; G2.fillText(d.text || '', a[0], a[1]); const w = G2.measureText(d.text || '').width; if (K >= 0) (hits[K] = hits[K] || []).push([a[0], a[1], a[0] + w, a[1]]); },
     emoji: (P, col, q, d) => { const [a] = P; G2.font = '22px "Apple Color Emoji",sans-serif'; G2.textAlign = 'center'; G2.textBaseline = 'middle'; G2.fillText(d.emoji || '👍', a[0], a[1]); if (col === SEL) ring(a[0], a[1], 15, 15, SEL, 0, Math.PI * 2); if (K >= 0) (hits[K] = hits[K] || []).push([a[0], a[1], a[0], a[1]]); },
+    // ---------- 笔刷组：荧光笔、箭头、形状（只画，不判定）----------
+    hilite: (P, col) => pathStroke(P, col === SEL ? c.rgba(SEL, 0.55) : c.rgba('#fde047', 0.38), 12),
+    arrowln: (P, col) => { const [a, b] = P; if (!b) return; seg(a[0], a[1], b[0], b[1], col, 1.8); arrowHead(a, b, col); },
+    arrowmk: (P, col) => { const [a, b] = P; if (b) fatArrow(a, b, col); },
+    arrowup: (P, col) => markArrow(P[0], 1, col), arrowdn: (P, col) => markArrow(P[0], -1, col),
+    rect: (P, col) => { const [a, b] = P; if (b) shape([[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]], col); },
+    rrect: (P, col) => {
+      const [a, b, d] = P; if (!b) return; if (!d) return seg(a[0], a[1], b[0], b[1], sc(col), 1.4);
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / L, ny = (b[0] - a[0]) / L, off = (d[0] - a[0]) * nx + (d[1] - a[1]) * ny;
+      shape([[a[0], a[1]], [b[0], b[1]], [b[0] + off * nx, b[1] + off * ny], [a[0] + off * nx, a[1] + off * ny]], col);
+    },
+    path: (P, col) => { if (P.length < 2) return; poly(P, col, 1.8); arrowHead(P[P.length - 2], P[P.length - 1], col); },
+    circ: (P, col) => { const [a, b] = P; if (!b) return; const r = Math.hypot(b[0] - a[0], b[1] - a[1]); oval(a[0], a[1], r, r, col); },
+    ellipse: (P, col) => { const [a, b] = P; if (b) oval((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.abs(b[0] - a[0]) / 2, Math.abs(b[1] - a[1]) / 2, col); },
+    polyline: (P, col, q, d) => { if (d && d.closed && P.length > 2) shape(P, col); else poly(P, sc(col), 1.4); },
+    tri3: (P, col) => { if (P.length < 3) poly(P, sc(col), 1.4); else shape(P, col); },
+    arcsh: (P, col) => {
+      const [a, m, b] = P; if (!m) return; if (!b) return seg(a[0], a[1], m[0], m[1], sc(col), 1.2, [3, 3]);
+      const C = bezQ(a, m, b); fill(C, sc(col), 0.16); poly(C, sc(col), 1.4); seg(b[0], b[1], a[0], a[1], sc(col), 1, [3, 3]);
+    },
+    curve: (P, col) => { const [a, m, b] = P; if (!m) return; if (!b) return seg(a[0], a[1], m[0], m[1], col, 1.6); poly(bezQ(a, m, b), col, 1.8); },
+    dcurve: (P, col) => { if (P.length < 4) return poly(P, col, 1, [3, 3]); poly(bezC(P[0], P[1], P[2], P[3]), col, 1.8); },
   };
+  // 形状默认用紫色（录屏里的矩形是紫色填充）；选中时照常变白
+  const SHP = '#a78bfa';
+  const sc = col => (col === COL ? SHP : col);
+  function shape(Q, col) { const s = sc(col); fill(Q, s, 0.16); poly(Q, s, 1.4, [], true); }
+  function oval(cx, cy, rx, ry, col) {
+    const s = sc(col), g = G2; if (rx < 1 || ry < 1) return;
+    g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); g.fillStyle = c.rgba(s, 0.16); g.fill(); ring(cx, cy, rx, ry, s, 0, Math.PI * 2);
+  }
+  function pathStroke(P, style, w) {     // 一笔画完：半透明的荧光笔在拐角处不会叠深
+    if (P.length < 2) return; const g = G2;
+    g.save(); g.beginPath(); P.forEach((p, k) => (k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])));
+    g.strokeStyle = style; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round'; g.setLineDash([]); g.stroke(); g.restore();
+    if (K >= 0) for (let k = 1; k < P.length; k++) (hits[K] = hits[K] || []).push([P[k - 1][0], P[k - 1][1], P[k][0], P[k][1]]);
+  }
+  function bezQ(a, m, b) {               // 过三个点的弧：中间那个点落在一半的位置
+    const cx = 2 * m[0] - (a[0] + b[0]) / 2, cy = 2 * m[1] - (a[1] + b[1]) / 2, out = [];
+    for (let k = 0; k <= 40; k++) { const t = k / 40, u = 1 - t; out.push([u * u * a[0] + 2 * u * t * cx + t * t * b[0], u * u * a[1] + 2 * u * t * cy + t * t * b[1]]); }
+    return out;
+  }
+  function bezC(a, q1, q2, b) {          // 过四个点的 S 形曲线：第 2、3 个点落在三分之一、三分之二处
+    const U = [27 * q1[0] - 8 * a[0] - b[0], 27 * q1[1] - 8 * a[1] - b[1]], V = [27 * q2[0] - a[0] - 8 * b[0], 27 * q2[1] - a[1] - 8 * b[1]];
+    const c1 = [(2 * U[0] - V[0]) / 18, (2 * U[1] - V[1]) / 18], c2 = [(2 * V[0] - U[0]) / 18, (2 * V[1] - U[1]) / 18], out = [];
+    for (let k = 0; k <= 60; k++) { const t = k / 60, u = 1 - t, w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t; out.push([w0 * a[0] + w1 * c1[0] + w2 * c2[0] + w3 * b[0], w0 * a[1] + w1 * c1[1] + w2 * c2[1] + w3 * b[1]]); }
+    return out;
+  }
+  function markArrow(p, dir, col) {      // 向上 / 向下箭头：尖头落在点的位置；颜色照面板的红涨绿跌
+    if (!p) return; const g = G2, [x, y] = p, s = dir;
+    const Q = [[x, y], [x + 10, y + s * 12], [x + 4, y + s * 12], [x + 4, y + s * 30], [x - 4, y + s * 30], [x - 4, y + s * 12], [x - 10, y + s * 12]];
+    g.beginPath(); Q.forEach((q, k) => (k ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]))); g.closePath(); g.fillStyle = col === SEL ? SEL : (dir > 0 ? '#f0484e' : '#1fa391'); g.fill();
+    if (K >= 0) (hits[K] = hits[K] || []).push([x, y, x, y + s * 30]);
+  }
+  function fatArrow(a, b, col) {         // 箭头标记：一支粗箭头，从第 1 个点指向第 2 个点
+    const t = Math.atan2(b[1] - a[1], b[0] - a[0]), L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 4) return;
+    const hl = Math.min(22, L * 0.45), sw = 5, hw = 12, cs = Math.cos(t), sn = Math.sin(t), at = (u, v) => [a[0] + u * cs - v * sn, a[1] + u * sn + v * cs];
+    const Q = [at(0, -sw), at(L - hl, -sw), at(L - hl, -hw), at(L, 0), at(L - hl, hw), at(L - hl, sw), at(0, sw)];
+    fill(Q, col, col === SEL ? 0.5 : 0.85); poly(Q, col, 1, [], true);
+  }
   function angleOf(P) { const [a, b] = P; return (-Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI).toFixed(1); }
   function ratio(p1, p2, p3, p4) { const d1 = Math.abs(p2.p - p1.p), d2 = Math.abs(p4.p - p3.p); return d2 ? (d1 / d2).toFixed(3) : '—'; }
   function days(a, b) { if (!a.d || !b.d) return ''; return ' · ' + Math.round(Math.abs(new Date(b.d) - new Date(a.d)) / 864e5) + ' 天'; }
@@ -348,7 +418,7 @@ window.FEDraw = (() => {
 
   // ---------- 对外：画一条、预览、点击、命中 ----------
   function render(d, k, sel) {
-    const P = (d.pts || []).map(XY); if (P.some(p => !p) && d.type !== 'brush') return;
+    const P = (d.pts || []).map(XY); if (P.some(p => !p) && !DRAG[d.type]) return;
     G2 = c.g(); K = k; hits[k] = [];
     const f = R[d.type]; if (f) f(P.filter(Boolean), sel ? SEL : (d.color || COL), d.pts, d);
     K = -1;
@@ -356,7 +426,7 @@ window.FEDraw = (() => {
   function preview() {
     const S0 = S(), t = S0.tool, cur = S0.cur; if (!has(t) || !cur || cur.p == null) return;
     G2 = c.g(); K = -1; G2.globalAlpha = 0.85;
-    if (t === 'brush') { if (stroke) R.brush(stroke.map(XY).filter(Boolean), COL); G2.globalAlpha = 1; return; }
+    if (DRAG[t]) { if (stroke) R[stroke.tool](stroke.pts.map(XY).filter(Boolean), COL); G2.globalAlpha = 1; return; }
     const pts = ((S0.pending && S0.pending.pts) || []).concat([pick(cur)]);
     const P = pts.map(XY);
     if (P.every(Boolean)) {
@@ -370,7 +440,13 @@ window.FEDraw = (() => {
   }
   function click(pt) {
     const S0 = S(), t = S0.tool, tool = TOOLS[t], q = pick(pt);
-    if (t === 'brush') return;
+    if (DRAG[t]) return;
+    if (tool.n < 0) {          // 路径、折线：一下一下点；在同一处再点一下（双击）就结束，折线点回第一个点就封口
+      const prev = (S0.pending && S0.pending.pts) || [], Pq = XY(q), Pl = prev.length ? XY(prev[prev.length - 1]) : null, P0 = prev.length ? XY(prev[0]) : null;
+      if (Pl && Pq && Math.hypot(Pq[0] - Pl[0], Pq[1] - Pl[1]) < 6) return finishMulti(false);
+      if (t === 'polyline' && prev.length >= 2 && P0 && Pq && Math.hypot(Pq[0] - P0[0], Pq[1] - P0[1]) < 9) return finishMulti(true);
+      S0.pending = { pts: prev.concat([q]) }; c.updateHint(); c.redraw(); return;
+    }
     const pts = ((S0.pending && S0.pending.pts) || []).concat([q]);
     if (t === 'text') { S0.pending = { pts, textFor: 'text' }; c.askText(pt); return; }
     if (pts.length < tool.n) { S0.pending = { pts }; c.updateHint(); c.redraw(); return; }
@@ -379,6 +455,13 @@ window.FEDraw = (() => {
     const d = { type: t, pts };
     if (t === 'emoji') d.emoji = emoji;
     c.addDrawing(d);
+  }
+  function finishMulti(closed) {
+    const S0 = S(), t = S0.tool, pts = (S0.pending && S0.pending.pts) || [];
+    if (!TOOLS[t] || TOOLS[t].n >= 0) return false;
+    if (pts.length < 2) { c.toast(TOOLS[t].name + '至少要点两个点。', true); return true; }
+    const d = { type: t, pts }; if (closed) d.closed = true;
+    c.addDrawing(d); return true;
   }
   function finishText(v) { const S0 = S(); if (S0.pending && S0.pending.textFor === 'text' && v) c.addDrawing({ type: 'text', pts: S0.pending.pts, text: v }); }
   function hit(k, x, y) {
@@ -390,7 +473,10 @@ window.FEDraw = (() => {
   function hint() {
     const S0 = S(), t = TOOLS[S0.tool]; if (!t) return '';
     const n = ((S0.pending && S0.pending.pts) || []).length;
-    if (S0.tool === 'brush') return '画笔：按住鼠标拖动来画，松开就画好';
+    if (S0.tool === 'brush') return '笔刷：按住鼠标拖动来画，松开就画好';
+    if (S0.tool === 'hilite') return '荧光笔：按住鼠标拖动来涂，松开就画好';
+    if (t.n < 0) return t.name + '：' + (n ? '已点 ' + n + ' 个点，接着点；双击或按回车结束' + (S0.tool === 'polyline' ? '，点回第一个点就封口' : '') : '一下一下点，双击或按回车结束');
+    if (S0.tool === 'arcsh' || S0.tool === 'curve' || S0.tool === 'dcurve') return t.name + '：顺着要画的线依次点（共 ' + t.n + ' 个点，' + (n ? '再点第 ' + (n + 1) + ' 个' : '先点起点') + '）';
     if (S0.tool === 'zoom') return '放大：' + (n ? '再点一下框的另一角' : '先点要放大那一段的一头');
     if (S0.tool === 'ruler') return '尺子：' + (n ? '再点终点，量出涨跌、根数和天数' : '先点起点');
     if (S0.tool === 'text') return '文字：点一下要写字的位置';
@@ -405,14 +491,16 @@ window.FEDraw = (() => {
   // ---------- 鼠标（画笔要按住拖动）和快捷键 ----------
   function bindMouse() {
     const ov = $('#overlay');
-    ov.addEventListener('mousedown', e => { if (S().tool !== 'brush') return; const pt = c.ptFromEvent(e); stroke = [{ i: pt.li, p: pt.p, d: B().d[pt.li] || null }]; });
-    ov.addEventListener('mousemove', e => { if (!stroke) return; const pt = c.ptFromEvent(e), last = stroke[stroke.length - 1]; if (pt.li !== last.i || Math.abs(c.Y(pt.p) - c.Y(last.p)) > 3) stroke.push({ i: pt.li, p: pt.p, d: B().d[pt.li] || null }); c.redraw(); });
-    window.addEventListener('mouseup', () => { if (!stroke) return; const s = stroke; stroke = null; if (s.length > 1) c.addDrawing({ type: 'brush', pts: s }); else c.redraw(); });
+    ov.addEventListener('mousedown', e => { const t = S().tool; if (!DRAG[t]) return; const pt = c.ptFromEvent(e); stroke = { tool: t, pts: [{ i: pt.li, p: pt.p, d: B().d[pt.li] || null }] }; });
+    ov.addEventListener('mousemove', e => { if (!stroke) return; const pt = c.ptFromEvent(e), s = stroke.pts, last = s[s.length - 1]; if (pt.li !== last.i || Math.abs(c.Y(pt.p) - c.Y(last.p)) > 3) s.push({ i: pt.li, p: pt.p, d: B().d[pt.li] || null }); c.redraw(); });
+    window.addEventListener('mouseup', () => { if (!stroke) return; const s = stroke; stroke = null; if (s.pts.length > 1) c.addDrawing({ type: s.tool, pts: s.pts }); else c.redraw(); });
     ov.addEventListener('click', () => { if (ruler && S().tool === 'cursor') { ruler = null; c.redraw(); } });
     document.addEventListener('keydown', e => {
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
       if (e.key === 'Escape') { closeMenus(); if (ruler) { ruler = null; c.redraw(); } }
+      if (e.key === 'Enter' && S().pending && TOOLS[S().tool] && TOOLS[S().tool].n < 0) { e.preventDefault(); finishMulti(false); return; }
       if (!e.altKey) return;
+      if (e.shiftKey && e.code === 'KeyR') { e.preventDefault(); c.setTool('rect'); return; }
       const k = { KeyT: 'trend', KeyH: 'hline', KeyJ: 'hray', KeyV: 'vline', KeyC: 'cross', KeyF: 'fibret' }[e.code];
       if (k) { e.preventDefault(); c.setTool(k); }
     });

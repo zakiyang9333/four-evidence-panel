@@ -26,10 +26,7 @@ STATES = ('ready', 'wait', 'avoid', 'risk', 'watch', 'na', 'dead')
 
 def R(P, x):
     """A working-direction price back to a real price, rounded for display (more decimals below 1, e.g. early split-adjusted prices)."""
-    if x is None:
-        return None
-    v = float(P['s'] * x)
-    return round(v, 2) if abs(v) >= 1 else round(v, 4)
+    return None if x is None else hs.px(P['s'] * x)
 
 
 def span(P, a, b):
@@ -135,7 +132,8 @@ def plan(P, zlo, zhi, stop, t1, t2=None, t2_note='', t2_none=''):
     ok2 = t2 is not None and t1 is not None and t2 > t1
     return dict(zone=list(span(P, zlo, zhi)), mid=R(P, mid), stop=R(P, stop), t1=R(P, t1), t2=R(P, t2) if ok2 else None,
                 t2_note=t2_note if ok2 else (t2_none or '第二目标的位置没有超过第一目标，不设'),
-                rr=r2((t1 - mid) / (mid - stop)) if t1 is not None and mid > stop and t1 > mid else None, _stop=stop)
+                rr=r2((t1 - mid) / (mid - stop)) if t1 is not None and mid > stop and t1 > mid else None, _stop=stop,
+                _bad=hs.plan_check(P['s'], mid, stop, t1))      # 价位在显示的位数下分不开：settle() 会把这次“条件齐”收回
 
 
 def finish(out):
@@ -204,15 +202,27 @@ def legend_item(key, text):
 
 # ---------- what needs earlier bars: a triggered structure dies when a close goes through its stop ----------
 
+def fine(r):
+    """A ready result whose plan can't be shown honestly (houshou.plan_check: entry and stop can't be told apart at the shown decimals,
+    or the reward/risk worked out from the shown prices disagrees with the real one) is not a trigger: no 条件齐, no prices, no reward/risk."""
+    if r.get('state') != 'ready' or not r.get('_bad'):
+        return r
+    note = f'清单都成立，但{r["_bad"]}。这一次不算条件齐，也不给价位和盈亏比。'
+    r = dict(r)
+    r.update(verdict=hs.TOO_FINE, verdict_text='价位太细，不给价位', state='na', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, cells=None,
+             zone_from=None, next_needs=[], note=note, text=note, _stop=None)
+    return r
+
+
 def settle(P, key, core, j):
     """core(P, j) plus the one thing that needs earlier results. core must memoise itself (use memo())."""
-    r = dict(core(P, j))
+    r = fine(dict(core(P, j)))
     ev = r.get('_ev')
     if ev is None or r['state'] == 'dead':
         return r
     start = r['_from'] if r.get('_from') is not None else max(0, j - 60)
     for q in range(max(0, start), j):
-        rq = core(P, q)
+        rq = fine(core(P, q))
         if rq.get('_ev') == ev and rq['state'] == 'ready' and rq.get('_stop') is not None:
             x = next((x for x in range(q + 1, j + 1) if P['c'][x] < rq['_stop']), None)
             if x is not None:

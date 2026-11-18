@@ -162,6 +162,7 @@ window.FEQuant = (() => {
       if (my !== Q.seq) return;
       if (r.ok === false) throw new Error(r.error);
       Q.data = r; chrome(); render(); c.redraw(); c.narr.restore();
+      if (window.FEChat) window.FEChat.onState();         // 对话页顶上那一行（它在看哪张图）和开场问题跟着这一份结果变
     } catch (e) { if (my === Q.seq) c.toast('量化面板没取到：' + e.message, true); }
   }
   const onState = () => { if (!fresh()) fetch(); else render(); if (Q.tab === 'models') loadScan(); };
@@ -413,7 +414,10 @@ window.FEQuant = (() => {
       (hi.rows.length ? '<table class="q-tab"><tr><th>日期</th><th>入场中值</th><th>止损</th><th>目标</th><th>盈亏比</th><th>之后 ' + hi.hold + ' 根</th></tr>' +
         hi.rows.slice().reverse().slice(0, 60).map(r => '<tr><td><button data-replay="' + r.date + '">' + r.date + '</button></td><td>' + c.fmtP(r.mid) + '</td><td>' + c.fmtP(r.stop) + '</td><td>' + c.fmtP(r.t1) + '</td><td>' + (r.rr != null ? r.rr.toFixed(2) : '—') + '</td><td class="' + r.outcome + '">' + OUT[r.outcome] + (r.bars ? ' · ' + r.bars + ' 根' : '') + '</td></tr>').join('') + '</table>' +
         (hi.rows.length > 60 ? '<p class="fine">只列最近 60 次，一共 ' + hi.rows.length + ' 次。</p>' : '')
-        : '<p class="fine">到这一天为止，这只标的在这个方向上，清单从没有同时成立过。</p>') +
+        : hi.never   // 看最新一根时：说的是全部历史；回放到过去时只说到那一天为止（不提之后的事）
+          ? '<p class="fine q-never"><b>全部样本上一次都没触发过。</b>这只标的全部 ' + (st.bars || 0) + ' 根' + (d.tf === 'W' ? '周' : '日') + ' K（' + esc((c.S.bars && c.S.bars.d[0]) || '') + ' 至 ' + d.asof +
+            '）里，这个方向上清单从没有同时成立过。这和信号卡上的「' + esc(d.signal.verdict_text) + '」不是一回事：信号卡只说今天，这一句说的是全部历史。</p>'
+          : '<p class="fine">到这一天为止，这只标的在这个方向上，清单从没有同时成立过。</p>') +
       '<p class="fine" id="qStats">' + stat + '</p>' +
       (hi.rr_median != null ? '<p class="fine">这些触发的盈亏比，中间那一个是 ' + hi.rr_median.toFixed(2) + ' : 1。' + (hi.rr_median < 1 ? '目标比止损近，所以“先到目标”的次数多，并不说明能赚：赢一次赚的，不够亏一次赔的。' : '') + '</p>' : '') +
       '<p class="fine">没有扣手续费和滑点，也没有和“随便挑一天”对照过：这不是回测，只是把出现过的次数数一遍。</p></details>';
@@ -443,7 +447,7 @@ window.FEQuant = (() => {
     const bad = d && (!d.side_ok || !d.tf_ok), have = Q.tasks && Q.tasks.tasks.some(t => t.ticker === cur.ticker && t.model === cur.model && t.side === cur.side && t.horizon === cur.horizon && t.tf === cur.tf);
     $('#qTaskAdd').innerHTML = '<div class="t-cur"><small>现在的组合</small><b>' + esc(label(cur)) + '</b></div>' +
       '<button id="qTaskNew" class="primary"' + (bad || have ? ' disabled' : '') + '>＋ 加入盯盘</button>' +
-      '<p class="fine">' + (bad ? '这个模型没有这个方向（或这个级别）的规则，盯不了。' : have ? '这个组合已经在盯了。' : '每次有新的收盘 K 线，程序会把这套清单重看一遍；齐了就在这里记一笔，并在「任务」上亮红点。只是提醒：不会替你交易，也不往外发消息。') + '</p>';
+      '<p class="fine">' + (bad ? '这个模型没有这个方向（或这个级别）的规则，盯不了。' : have ? '这个组合已经在盯了。' : '每次有新的收盘 K 线，程序会把这套清单重看一遍；齐了就在这里记一笔，并在「任务」上亮红点。只是提醒，不会替你交易；打开下面的「提醒」，还会发 Mac 通知或推到手机。') + '</p>';
     const T = Q.tasks, box = $('#qTaskList');
     if (!T) box.innerHTML = '<div class="muted small">加载中…</div>';
     else if (!T.tasks.length) box.innerHTML = '<div class="card thin empty">还没有盯盘任务。先在「分析」页选好模型和方向，再回来点上面的按钮。</div>';
@@ -458,6 +462,7 @@ window.FEQuant = (() => {
             (hits.length ? '<div class="t-hits">' + hits.map(h => '<button data-task="hit" data-asof="' + h.asof + '" class="' + (h.seen ? '' : 'new') + '" title="回到这一天看当时的清单和价位">' + h.asof + ' 条件齐</button>').join('') + '</div>' : '') + '</div>';
         }).join('');
     }
+    renderNotify();
     const R = Q.runs, rl = $('#qRunList');
     $('#qRunCount').textContent = R ? '共 ' + R.total + ' 次 · 点一行回到那一刻' : '';
     if (!R) rl.innerHTML = '<div class="muted small">加载中…</div>';
@@ -465,6 +470,29 @@ window.FEQuant = (() => {
     else rl.innerHTML = R.runs.map((r, k) => '<button class="run-row" data-run="' + k + '"><span>' + esc(String(r.at).slice(5, 16)) + '</span><b>' + esc(label(r)) + '</b><i class="m-side ' + r.state + '">' + esc(r.verdict) + '</i>' +
       '<small>' + esc(r.asof) + ' 收盘 ' + c.fmtP(r.price) + ' · 表盘 ' + (r.score > 0 ? '+' : '') + r.score + ' ' + esc(r.score_label) + (r.ai ? ' · ' + ({ template: '模板解读', saved: 'Claude 存档', claude: 'Claude' }[r.ai] || '') : '') + '</small></button>').join('') +
       '<button class="run-clear" data-task="clear">清空记录</button>';
+  }
+  /* 提醒：Mac 通知（只在这台电脑上，可以带价格）和 iMessage（推到手机，只说哪只、什么事，不带持仓数字） */
+  async function renderNotify(reload) {
+    const box = $('#qNotify');
+    if (!box) return;
+    if (!Q.notify || reload) { try { Q.notify = await c.api('/api/notify'); } catch (e) { Q.notify = null; } }
+    const N = Q.notify;
+    if (!N || N.ok === false) { box.innerHTML = '<div class="muted small">提醒的设定没取到。</div>'; return; }
+    const s = N.settings;
+    box.innerHTML = '<label class="n-row"><input type="checkbox" id="nMac"' + (s.mac ? ' checked' : '') + '> Mac 通知（只在这台电脑上，可以带价格）</label>' +
+      '<label class="n-row">推到手机（iMessage）<input id="nIm" placeholder="手机号或 Apple ID" value="' + esc(s.imessage) + '" autocomplete="off"></label>' +
+      '<div class="n-row"><button id="nSave" class="primary">保存</button><button id="nTest"' + (s.mac || s.imessage ? '' : ' disabled') + '>发一条测试</button></div>' +
+      '<p class="fine">盯盘任务条件齐了、收盘碰到你持仓里的线（成本、行权价、归零线、估值参考）时各提醒一次。发到手机的那条只说哪只、什么事，不带任何持仓数字。' +
+      'iMessage 第一次发的时候，Mac 会问能不能让面板控制「信息」，点允许。</p>' +
+      '<p class="fine">AI 对话里问“为什么跌”这类问题，会自动联网查：今天用了 ' + N.auto_web_used + ' / ' + N.auto_web_daily + ' 次（按次计费）。</p>';
+    $('#nSave').onclick = async () => {
+      try { const r = await c.api('/api/notify', { mac: $('#nMac').checked, imessage: $('#nIm').value }); if (r.ok === false) throw new Error(r.error); c.toast('提醒的设定存好了。'); renderNotify(true); }
+      catch (e) { c.toast('没存成：' + e.message, true); }
+    };
+    $('#nTest').onclick = async () => {
+      try { const r = await c.api('/api/notify/test', {}); if (r.ok === false) throw new Error(r.error); c.toast(r.sent.length ? '发出去了：' + r.sent.map(x => x === 'mac' ? 'Mac 通知' : 'iMessage').join('、') + '。' : '没发出去：先打开 Mac 通知或填好 iMessage，再保存。', !r.sent.length); }
+      catch (e) { c.toast('没发出去：' + e.message, true); }
+    };
   }
   async function taskOp(body) {
     try { const r = await c.api('/api/quant/tasks', body); if (r.ok === false) throw new Error(r.error); Q.tasks = r; Q.tasksAt = Date.now(); dot(); renderTasks(); return true; } catch (e) { c.toast('没办成：' + e.message, true); return false; }

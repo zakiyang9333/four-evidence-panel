@@ -95,6 +95,7 @@ window.FENarrate = (() => {
     try {
       const r = await ctx.api('/api/ai/narrate?ticker=' + ctx.ticker() + '&asof=' + ctx.asof() + ctx.query());
       if (my !== seq) return;
+      if (r.ok === false) throw new Error(r.error || ('服务端回了 ' + r._status));      // 取不到要说出来，不能像按钮坏了一样没反应
       const use = r.polished ? Object.assign({}, r.polished, { polish: r.polish }) : r;
       busy = false; show(use, true);
     } catch (e) { busy = false; ctx.toast('解说没取到：' + e.message, true); sync(); }

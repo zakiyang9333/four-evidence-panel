@@ -327,37 +327,6 @@ button.big:disabled{opacity:.6}
 #learnBtn.on{background:var(--hazard);color:#141414}
 #learn{flex:none;width:372px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
 #learn[hidden]{display:none}
-.learn-head{flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
-.learn-head b{font-size:14px;color:var(--hazard)}.learn-head .muted{font-size:11.5px}
-.learn-body{flex:1;overflow-y:auto;padding:10px 12px 28px;display:flex;flex-direction:column;gap:10px}
-.learn-body>*{flex:none}
-.learn-lead{margin:0;color:var(--mut);font-size:12px;line-height:1.55}
-.learn-hl{border-radius:10px;padding:10px 12px;border:1.5px solid var(--line);background:var(--panel2);display:flex;flex-direction:column;gap:3px}
-.learn-hl small{color:var(--mut);font-size:11px}.learn-hl b{font-size:16.5px;line-height:1.35}.learn-hl span{font-size:12.5px;line-height:1.5;color:#c9ced9}
-.learn-hl.go{border-color:var(--hazard)}.learn-hl.go b{color:var(--hazard)}
-.learn-hl.stop{border-color:#f87171}.learn-hl.stop b{color:#fca5a5}
-.learn-hl.wait b{color:#e6e8ee}.learn-hl.na b{color:#aab1c2}
-.lcard{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:10px;padding:10px 12px 9px;margin:0}
-.lcard.yes{border-left-color:var(--hazard)}.lcard.no{border-left-color:#4b5263}
-.lcard h4{margin:0 0 5px;font-size:13.5px;line-height:1.4;display:flex;gap:7px;align-items:flex-start}
-.lcard h4 i{flex:none;font-style:normal;width:18px;height:18px;border-radius:50%;background:var(--line);color:var(--mut);font-size:10.5px;line-height:18px;text-align:center;margin-top:1px}
-.lcard p{margin:0;font-size:13px;line-height:1.7;color:#d7dbe5}
-.lnow{margin-top:7px;background:#0f141d;border-radius:7px;padding:7px 9px;font-size:12.5px;line-height:1.65}
-.lnow span{display:inline-block;background:var(--hazard);color:#141414;font-weight:800;font-size:10.5px;border-radius:3px;padding:0 5px;margin-right:6px;line-height:16px;vertical-align:1px}
-.litems{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:5px}
-.litems li{font-size:12px;line-height:1.55;border-left:2px solid #4b5263;padding-left:8px}
-.litems li.yes{border-left-color:var(--hazard)}.litems li b{display:block}.litems li.yes b{color:var(--hazard)}.litems li span{color:var(--mut)}
-.lcard .lnote{margin-top:6px;color:var(--mut);font-size:11.5px;line-height:1.55}
-.lspot{margin-top:7px;padding:2px 10px;font-size:11.5px;border-radius:999px;color:var(--acc);border-color:#1d4d63;background:none}
-.lgloss{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
-.lgloss summary{cursor:pointer;font-size:12.5px;color:var(--mut)}
-.lgloss dl{margin:6px 0 0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:12px;line-height:1.5}
-.lgloss dt{font-weight:700;white-space:nowrap}.lgloss dd{margin:0;color:#c9ced9}
-.lfoot{margin:0;color:var(--mut);font-size:11px;line-height:1.5}
-.learn-spot{animation:learnspot 2.4s ease-out;position:relative;z-index:6}
-@keyframes learnspot{0%,60%{box-shadow:0 0 0 3px var(--hazard),0 0 22px 4px #f7c60088}100%{box-shadow:0 0 0 3px transparent}}
-#chartwrap.learn-spot{animation:learnspot2 2.4s ease-out}
-@keyframes learnspot2{0%,60%{box-shadow:inset 0 0 0 3px var(--hazard)}100%{box-shadow:inset 0 0 0 3px transparent}}
 @media (max-width:1280px){#learn{position:absolute;left:58px;top:0;bottom:0;z-index:18;box-shadow:8px 0 24px #000a}#main{position:relative}}
 /* ---------- 「时效与备注」 ---------- */
 #noteTip{position:absolute;z-index:8;width:290px;background:#0c0f15f2;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font-size:12px;line-height:1.5;pointer-events:none;box-shadow:0 6px 20px #000a}
@@ -402,8 +371,10 @@ button.big:disabled{opacity:.6}
 .cmsg .bubble{border-radius:12px;padding:8px 11px;font-size:13.5px;line-height:1.7;max-width:100%;overflow-wrap:anywhere}
 .cmsg.user .bubble{background:#17384a;color:#e6f6ff;white-space:pre-wrap;max-width:92%;border-bottom-right-radius:4px}
 .cmsg.ai .bubble{background:var(--panel2);border:1px solid var(--line);border-bottom-left-radius:4px}
-.cmsg.explain{gap:8px}
-.cx-note{color:var(--mut);font-size:10.5px}.cx-chip{align-self:flex-start;font-size:11px;color:var(--hazard);border:1px solid #5a4a12;border-radius:999px;padding:1px 9px}
+.chat-ctx{flex:none;padding:5px 12px;font-size:11.5px;color:var(--mut);border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-ctx[hidden]{display:none}
+.cx-div{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--mut)}.cx-div::before,.cx-div::after{content:"";flex:1;border-top:1px solid var(--line)}
+.cx-note{color:var(--mut);font-size:10.5px}
 .cx-src{font-size:11px;color:var(--mut);display:flex;flex-direction:column;gap:2px}.cx-src a{color:var(--acc);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bubble.md p{margin:0 0 7px;white-space:pre-wrap}.bubble.md>:last-child{margin-bottom:0}
 .bubble.md ul,.bubble.md ol{margin:0 0 7px;padding-left:20px}.bubble.md li{margin:2px 0}
@@ -415,7 +386,7 @@ button.big:disabled{opacity:.6}
 .typing{color:var(--mut);animation:typing 1.2s ease-in-out infinite}@keyframes typing{50%{opacity:.35}}
 .chat-quick{flex:none;display:flex;gap:5px;flex-wrap:wrap;padding:6px 10px 0}
 .chat-quick button{font-size:11.5px;padding:3px 9px;border-radius:999px;white-space:normal;text-align:left}
-.chat-quick .q-explain{border-color:var(--hazard);color:var(--hazard);font-weight:700}
+.chat-quick[hidden]{display:none}
 .chat-form{flex:none;padding:8px 10px 10px;display:flex;flex-direction:column;gap:6px}
 .chat-form textarea{resize:none;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--fg);font:inherit;font-size:13.5px;line-height:1.5;min-height:44px;max-height:160px}
 .chat-form textarea:focus{outline:none;border-color:var(--acc)}
@@ -456,3 +427,62 @@ button.big:disabled{opacity:.6}
 #favBar svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 #favBar span{font-size:12px;color:var(--mut);padding:4px 8px}
 #favBar[hidden]{display:none}
+
+/* ---------- 技术指标库（照录屏 1 的 00:33）---------- */
+#indBtn .ib-ico{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;vertical-align:-3px;margin-right:4px}
+#indLib{position:fixed;inset:0;background:#0009;z-index:55;display:flex;align-items:center;justify-content:center}
+#indLib[hidden]{display:none}
+.il-box{background:#151a24;border:1px solid var(--line);border-radius:12px;width:min(760px,94vw);height:min(560px,86vh);display:flex;flex-direction:column;box-shadow:0 18px 50px #0008}
+.il-head{display:flex;align-items:center;gap:6px;padding:12px 14px 6px}
+.il-head b{font-size:15px}
+.il-head button{width:28px;height:28px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);color:var(--mut)}
+.il-head button:hover{color:var(--fg)}
+.il-search{display:flex;align-items:center;gap:8px;margin:4px 14px 8px;padding:7px 10px;border:1px solid #2c5f80;border-radius:8px;background:#0f141d}
+.il-search svg{width:16px;height:16px;fill:none;stroke:var(--mut);stroke-width:2;flex:none}
+.il-search input{flex:1;background:transparent;border:0;outline:0;color:var(--fg);font-size:13px}
+.il-note{margin:0 14px 8px;padding:7px 10px;border-radius:8px;background:var(--panel2);color:var(--mut);font-size:12px;line-height:1.55}
+.il-body{flex:1;min-height:0;display:flex;border-top:1px solid var(--line)}
+.il-side{width:178px;flex:none;overflow-y:auto;padding:8px 6px;border-right:1px solid var(--line)}
+.il-h{color:var(--mut);font-size:11px;margin:10px 8px 4px}
+.il-h:first-child{margin-top:2px}
+.il-side button{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:7px;background:none;border:0;color:var(--fg);font-size:12.5px;text-align:left}
+.il-side button:hover{background:var(--panel2)}
+.il-side button.on{background:#123447;color:#7dd3fc}
+.il-side i{font-style:normal;width:14px;text-align:center;color:var(--mut)}
+.il-side span{flex:1}
+.il-side em{font-style:normal;color:var(--mut);font-size:11px}
+.il-main{flex:1;min-width:0;overflow-y:auto;padding:8px 10px}
+.il-cap{color:var(--mut);font-size:11.5px;margin:2px 4px 6px}
+.il-row{display:flex;align-items:center;gap:8px;padding:6px 6px;border-radius:7px}
+.il-row:hover{background:var(--panel2)}
+.il-row[hidden]{display:none}
+.il-fav{background:none;border:0;color:var(--mut);font-size:15px;line-height:1;padding:0 2px}
+.il-fav.on{color:#facc15}
+.il-item{flex:1;display:flex;align-items:baseline;gap:6px;cursor:pointer;min-width:0}
+.il-item input{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+.il-item b{font-weight:500;font-size:13px}
+.il-item small{color:var(--mut);font-size:11px}
+.il-tag{font-size:10.5px;color:#c4b5fd;background:#2e2650;border-radius:4px;padding:1px 6px}
+.il-added{display:none;font-size:10.5px;color:#22d3ee;background:#0e3640;border-radius:4px;padding:1px 6px}
+.il-row.on .il-added{display:inline}
+.il-row.on .il-item b{color:#7dd3fc}
+.il-extra .il-combo{display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--line)}
+.il-combo b{font-size:13px;font-weight:600;flex:none}
+.il-combo span{flex:1;color:var(--mut);font-size:12px}
+.il-combo button,.il-save{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:3px 9px;color:var(--fg);font-size:12px}
+.il-combo button:hover,.il-save:hover{border-color:var(--acc)}
+.il-save{display:block;margin:4px 6px 8px}
+.il-save:disabled{opacity:.5}
+.il-empty{color:var(--mut);font-size:12px;padding:10px 6px;line-height:1.6}
+/* 主图均线的图例 */
+.leg .mal i{font-style:normal;margin-left:6px}
+/* 回放：自动播放和快慢 */
+#rpPlay{min-width:72px}
+#rpPlay.on{background:var(--hazard);color:#241d08;border-color:var(--hazard)}
+#rpSpeed{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 4px;color:var(--fg)}
+
+/* 我的规则、忽略这一笔、提醒（2026-11-18） */
+.rules-edit{width:100%;box-sizing:border-box;font:13px/1.6 inherit;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0 8px;resize:vertical}
+.pf-table tr.pf-ignored td{opacity:.45}.pf-table tr.pf-ignored td.note{opacity:1}
+.pf-ign{margin-left:6px;padding:1px 8px;font-size:11px;border-radius:999px}
+#qNotify .n-row{display:flex;align-items:center;gap:8px;margin:0 0 7px;font-size:12.5px}#qNotify .n-row input:not([type]){flex:1;min-width:0}

@@ -11,12 +11,14 @@ GET  /api/live?ticker=      盘中实时价和今天常规时段的未收盘 K �
 GET  /api/ai/history?ticker=            按天保存的 AI 解读：哪些天分析过、哪个模型、那天的一句话
 GET  /api/chat/list | /api/chat/get?id=   AI 对话的列表和某一段的全部消息（存在本机 data/chats/）
 POST /api/chat/send         发一条消息，回答以 server-sent events 流式返回；整段对话的历史每次都带上（这就是记忆）
-POST /api/chat/explain | /delete        把一键解释作为一条消息放进对话（不调用 AI）；删一段对话
+POST /api/chat/delete       删一段对话（只删本机的记录）。对话里只有问答：以前「一键解释」的卡片留在文件里，不再显示、不再发给 AI
 GET  /api/notes?ticker=&asof=           K 线上的备注（事件日、新闻标题、联网搜到的、手写的）和各自的时效
 POST /api/notes/manual | /delete | /search   手写一条、删一条、让 Claude 联网查某几天（会计费，查过的不再查）
 POST /api/notes/translate   把存档里的英文新闻标题翻成中文并存下来（每条只翻一次）
 GET  /api/learn?ticker=&model=&asof=    「一键解释」学习面板：大白话讲这一天屏幕上的每样东西（程序拼的，不调用 AI）
-GET  /api/quant?ticker=&model=four|houshou|breakout&side=long|short&hz=20|60|120&tf=D|W&pos=auto|flat|long|short&asof=
+GET  /api/quant?ticker=&model=four|houshou|breakout|…&side=long|short&hz=20|60|120&tf=D|W&pos=auto|flat|long|short&asof=
+     不给的参数用默认值（model 默认 houshou，side long，hz 20，tf D，pos auto，asof 最新一根）；给了但不认识的值一律 400，
+     写明是哪个参数、可选什么，不会悄悄换成别的模型或周期。asof 是休市日时用它之前最近的一根，回复里 asof_note 写明。
                                「AI 量化」面板：结构线、评分表盘、所选规则模型的信号、历史触发（五个输入见 quant.py 开头）
 GET  /api/quant/models         模型库：每个模型的来历、清单、参数（哪些是录屏里说的，哪些是估算）
 GET  /api/quant/scan?hz=&tf=[&ticker=&model=&side=]   量化终端的表：每只标的 × 每个模型 × 多空现在的状态
@@ -32,6 +34,7 @@ POST /api/refresh           运行 prep_data.py（只追加新日期）
 POST /api/ai/analyze        Claude 解说（需要环境变量 ANTHROPIC_API_KEY）。盘面和仓位没变时直接返回保存的那一版，
                             不调用 API；带 force 才重新分析
 """
+import datetime
 import json
 import mimetypes
 import os
@@ -48,6 +51,7 @@ import chat
 import hashlib
 import live
 import learn
+import mine
 import narrate
 import notes
 import panel
@@ -109,8 +113,9 @@ def run_refresh():
                     last=r.get('last'), last_src=r.get('last_src'), sources=r.get('sources', {})) for t, r in rep.items()})
         out['has_error'] = any(r['errors'] for r in out['tickers'].values())
         _last_refresh = out
-        try:        # 有新 K 线了：把盯盘任务检查一遍（只在本机记一笔，不发任何东西）
+        try:        # 有新 K 线了：把盯盘任务和持仓里的线检查一遍（打开了「提醒」才发通知，发到手机的不带持仓数字）
             out['tasks_unseen'] = tasks.listing()['unseen']
+            tasks.line_alerts()
         except Exception:       # noqa: BLE001
             pass
         return 200, out
@@ -129,19 +134,54 @@ def meta():
 
 
 def ai_model(m, default='four'):
-    """A model key the registry knows; anything else falls back (old links and typos don't break the page)."""
-    return m if m in quant.MODEL else default
+    """The model key to use: missing or empty = the default; a key the registry doesn't know = BadParam (400), never another model."""
+    if not quant.given(m):
+        return default
+    if m not in quant.MODEL:
+        raise quant.BadParam('model', m, quant.MODEL)
+    return m
 
 
 def prof(src, default_model='four'):
-    """The five inputs of one analysis (model, side, horizon, bar size, position mode) from a query string or a JSON body."""
+    """The five inputs of one analysis (model, side, horizon, bar size, position mode) from a query string or a JSON body.
+    Missing ones take their defaults; values that are sent but unknown raise quant.BadParam, which the handler turns into a 400."""
     return quant.norm(ai_model(src.get('model'), default_model), src.get('side'), src.get('hz', src.get('horizon')), src.get('tf'), src.get('pos', src.get('posmode')))
+
+
+def bad_request(e):
+    """The body of a 400: what was wrong, and for an unknown value which parameter it was and what it can be."""
+    out = dict(ok=False, error=str(e) or '请求不对。')
+    if isinstance(e, quant.BadParam):
+        out.update(param=e.name, value=e.value, allowed=e.allowed)
+    return out
+
+
+def asof_of(src, t=None):
+    """The asof date of a request. Missing or empty = the latest bar. Otherwise it must be a real date written YYYY-MM-DD, and not
+    before the ticker's second bar (the engine needs two); anything else is BadParam (400), not silently the latest or the first bar.
+    A weekend or holiday is fine: the bar before it is used, and the reply's asof says which."""
+    a = src.get('asof')
+    if not quant.given(a):
+        return None
+    a = str(a).strip()
+    try:
+        ok = len(a) == 10 and datetime.date.fromisoformat(a).isoformat() == a
+    except ValueError:
+        ok = False
+    if not ok:
+        raise quant.BadParam('asof', a, why='要写成 YYYY-MM-DD 的日期，比如 2026-11-13；不给就是最新一根。')
+    if t in panel.TICKERS:
+        d = panel.load(t)['B']['d']
+        if len(d) > 1 and a < d[1]:
+            raise quant.BadParam('asof', a, why=f'早于 {t} 最早能看的一天（{d[1]}，引擎至少要两根 K 线）。')
+    return a
 
 
 def ai_inputs(t, asof, model='four', side='long', horizon=20, tf='D', posmode='auto'):
     """Everything one AI reading is built from, plus a fingerprint of it. Returns a dict."""
     a = quant.norm(ai_model(model), side, horizon, tf, posmode)
     model, side, horizon, tf, posmode = a['model'], a['side'], a['horizon'], a['tf'], a['posmode']
+    asof = asof_of(dict(asof=asof), t)
     q = quant.result(t, model, asof or None, side, horizon, tf, posmode)
     state = panel.state_at(t, q['asof'])        # 四证引擎在这一天的状态：周 K 时就是那根周 K 最后一个交易日的状态
     B = quant.bars(t, tf)
@@ -221,7 +261,9 @@ AI_CACHE = os.environ.get('FE_CACHE_DIR') or os.path.join(ROOT, 'cache', 'ai')
 AI_KEEP = 5
 
 
-VARIANT_RE = re.compile(r'(?:(houshou|breakout))?(?:_?(short))?(?:_?h(60|120))?(?:_?(W))?')
+# 组合名 ↔ 模型、方向、周期、级别。模型名从注册表里取：以前写死成 houshou|breakout，第二版新加的 10 个模型对不上，
+# 「AI 分析」按钮在这些模型上取解说时被当成“没有这个标的”（404）
+VARIANT_RE = re.compile(r'(?:(' + '|'.join(sorted((re.escape(k) for k in quant.MODEL if k != 'four'), key=len, reverse=True)) + r'))?(?:_?(short))?(?:_?h(60|120))?(?:_?(W))?')
 
 
 def variant_profile(var):
@@ -277,7 +319,7 @@ def ai_variants(t, asof=None):
     return [v for _, v in out] if asof is not None else out
 
 
-MODEL_NAMES = dict(four='四证·抄底', houshou='后手·成本线回踩', breakout='破位反抽')
+MODEL_NAMES = dict({m['key']: m['name'] for m in quant.MODELS}, four='四证·抄底', houshou='后手·成本线回踩', breakout='破位反抽')     # 分析记录里的名字：老三个照旧，其余用注册表里的
 
 
 def ai_history(t, limit=120):
@@ -292,8 +334,11 @@ def ai_history(t, limit=120):
             out.append(dict(date=date, model=o['model'], side=o['side'], horizon=o['horizon'], tf=o['tf'], variant=var,
                             model_name=MODEL_NAMES[o['model']] + ('' if o['side'] == 'long' else ' · 做空') + ('' if o['horizon'] == 20 else f' · {o["horizon"]} 根') + ('' if o['tf'] == 'D' else ' · 周K'),
                             created_at=r.get('created_at'), versions=len(rows),
-                            hook=(r.get('narration') or {}).get('hook'), final=(r.get('narration') or {}).get('final')))
-    out.sort(key=lambda r: (r['date'], r['created_at'] or ''), reverse=True)
+                            hook=(r.get('narration') or {}).get('hook'), final=(r.get('narration') or {}).get('final'),
+                            _mt=os.path.getmtime(_ai_cache_path(t, date, var))))
+    out.sort(key=lambda r: (r['date'], r['created_at'] or '', r['_mt']), reverse=True)      # 同一秒存的两份：按文件写入的先后
+    for r in out:
+        r.pop('_mt')
     return dict(ok=True, ticker=t, days=out[:limit])
 
 
@@ -315,23 +360,14 @@ def chat_context(t, asof, src):
                 notes=x['notes'], saved_ai_reading=reading)
     if x['pos']:
         body.update(x['pos'])           # 只有这只标的相关的仓位，和 AI 解读发的是同一份
+    if x['q']['is_latest'] and a['posmode'] == 'auto':
+        mx = portfolio.chat_extras(t)   # 他自己的线、估值参考、这只的挂单和点名它的检查项（只给对话，不进 AI 解读的指纹）
+        if mx:
+            body['mine'] = mx
     text = json.dumps(body, ensure_ascii=False, separators=(',', ':'), default=str)
     key = hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
     q = x['q']
     return text, key, f"{t} {q['asof']} · {q['model_name']}" + ('' if q['side'] == 'long' else ' · 做空') + ('' if q['tf'] == 'D' else ' · 周K')
-
-
-def chat_explain(body):
-    """一键解释进对话框：程序拼的，不调用 AI，作为一条助手消息存进对话。"""
-    t = body.get('ticker', '')
-    a = prof(body)
-    lp = learn.build(t, a['model'], body.get('asof') or None, a['side'], a['horizon'], a['tf'])
-    conv = chat.load(body.get('id') or '') or chat.new(t)
-    if not conv['messages']:
-        conv['title'] = '一键解释 · ' + lp['ticker'] + ' ' + lp['asof'][5:]
-    conv['messages'].append(dict(role='assistant', kind='explain', at=chat.now_text(), text=chat.explain_text(lp), learn=lp))
-    chat.save(conv)
-    return dict(ok=True, conv=chat.public(conv))
 
 
 def model_library():
@@ -350,8 +386,8 @@ def model_library():
           [dict(name=hs.EST_NOTE.get(k, k), v=v, src='est') for k, v in hs.EST.items()]
     brk = [dict(name=bo.VIDEO_NOTE.get(k, k), v=v, src='video') for k, v in bo.VIDEO.items()] + [dict(name=bo.EST_NOTE.get(k, k), v=v, src='est') for k, v in bo.EST.items()]
     notes_ = dict(four=['回测结论：' + str((panel.backtest_summary() or {}).get('verdict', '证据不足')) + '。所以这里只做观察。', '规则在 engine.py 里，这个文件不许改；面板只负责把它的结果摆出来。'],
-                  houshou=['没有回测过。按估算的参数，三只标的的日线上三项从没有同时成立过，卡在「缩量刺破收回」这一项。', '做空一侧是把同一套规则上下翻过来（价格取负后跑同一段代码），录屏里没有讲过。',
-                           '第二目标是从录屏那一格的数字反推的，录屏没有明说算法。'],
+                  houshou=['没有回测过。照录屏「后手战法」的五条总结重写，不是原作者的代码。'] + quant.houshou_sample_notes() +
+                          ['做空一侧是把同一套规则上下翻过来（价格取负后跑同一段代码），录屏里没有讲过。', '第二目标是从录屏那一格的数字反推的，录屏没有明说算法。'],
                   breakout=['录屏「卧底战法」那一段给了三条要点（破线看收盘、破线量过前 5 根均量 1.5 倍、反抽量缩到破线日一半以内），0.2 照这三条改过。这是重写的，不是原作者的代码。',
                             '没有回测过。查过的开源实现里，有一位作者自己报告这类形态样本外是亏的（每笔 −0.27R，763 笔）。', '破位和反抽的容差按波动率（ATR）放缩，倍数取几份开源实现的中间值。'])
     refs = dict(breakout=['TradingSignalBot/tradingview-strategies（MIT）', 'hanreywt/Screener_Alert', 'ascendro-ca/break-and-retest', 'neurotrader888/TechnicalAnalysisAutomation（MIT）'],
@@ -374,13 +410,13 @@ def model_library():
 
 def quant_scan(q):
     """量化终端的表。给了 ticker / model / side 就只算那一格，否则算全部（3 只 × 3 个模型 × 多空）。"""
-    a = quant.norm('four', None, q.get('hz', q.get('horizon')), q.get('tf'), 'flat')
+    a = quant.norm('four', q.get('side'), q.get('hz', q.get('horizon')), q.get('tf'), 'flat')      # 不认识的 side / hz / tf：400
     ts = [q['ticker']] if q.get('ticker') else list(panel.TICKERS)
-    ms = [q['model']] if q.get('model') else [m['key'] for m in quant.MODELS]
-    sides = [q['side']] if q.get('side') in ('long', 'short') else ['long', 'short']
+    ms = [ai_model(q['model'])] if quant.given(q.get('model')) else [m['key'] for m in quant.MODELS]
+    sides = [a['side']] if quant.given(q.get('side')) else ['long', 'short']
     if any(t not in panel.TICKERS for t in ts):
         raise KeyError(ts[0])
-    cells = [quant.scan_cell(t, ai_model(m), s, a['horizon'], a['tf']) for t in ts for m in ms for s in sides]
+    cells = [quant.scan_cell(t, m, s, a['horizon'], a['tf']) for t in ts for m in ms for s in sides]
     return dict(ok=True, horizon=a['horizon'], horizon_label=quant.horizon_label(a['horizon'], a['tf']), tf=a['tf'], cells=cells,
                 models=[dict(key=m['key'], name=m['name'], tested=m['tested'], group=m.get('group', ''), kind=m.get('kind', 'trade')) for m in quant.MODELS], tickers=list(panel.TICKERS), banner=quant.BANNER)
 
@@ -546,8 +582,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             conv = chat.load(body.get('id') or '') or chat.new(t)
             ctx, key, chip = chat_context(t, body.get('asof') or None, body)
+            # 联网：他勾了就查；没勾、但问的是原因或新闻（“为什么跌”），自动查，每天有上限（按次计费）
+            web, auto_web = bool(body.get('web')), False
+            if not web and mine.wants_news(text) and mine.auto_web_take(int(CFG.get('ai_chat_auto_web_daily', 3))):
+                web = auto_web = True
             attach = key != conv.get('ctx_key')        # 图表数据变了（换了标的、日期、模型，或多了备注）才再带一份
-            if not any(m['role'] == 'user' for m in conv['messages']) and (not conv['messages'] or conv['title'] == '新对话'):
+            if not any(m['role'] == 'user' for m in conv['messages']):        # 第一句提问就是这段对话的标题
                 conv['title'] = chat.title_from(text)
             conv['messages'].append(dict(role='user', at=chat.now_text(), text=text, context=ctx if attach else None, chip=chip if attach else None))
             conv.update(ctx_key=key, ticker=t)
@@ -562,7 +602,7 @@ class Handler(BaseHTTPRequestHandler):
             acc, info, err = [], None, None
             try:
                 self._sse('start', dict(id=conv['id'], title=conv['title'], chip=chip if attach else None))
-                for kind, val in ai_explain.chat_stream(chat.SYSTEM, chat.api_messages(conv), CFG, web=bool(body.get('web'))):
+                for kind, val in ai_explain.chat_stream(chat.system(), chat.api_messages(conv), CFG, web=web):
                     if kind == 'delta':
                         acc.append(val)
                         self._sse('delta', dict(text=val))
@@ -574,7 +614,7 @@ class Handler(BaseHTTPRequestHandler):
                 err = '已停止'
             reply = ''.join(acc)
             if reply.strip():
-                meta = dict(info or {}, interrupted=info is None)
+                meta = dict(info or {}, interrupted=info is None, auto_web=auto_web)
                 conv['messages'].append(dict(role='assistant', at=chat.now_text(), text=reply, meta=meta))
                 u = conv.setdefault('usage', dict(tokens_in=0, tokens_out=0, cache_read=0, calls=0))
                 if info:
@@ -609,15 +649,19 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {t: panel.freshness(t) for t in panel.TICKERS})
                 if u.path == '/api/ai/narrate':
                     a = prof(q)
-                    return self._send(200, ai_narrate(q.get('ticker', ''), q.get('asof') or None, a['model'], a['side'], a['horizon'], a['tf'], a['posmode']))
+                    return self._send(200, ai_narrate(q.get('ticker', ''), asof_of(q, q.get('ticker')), a['model'], a['side'], a['horizon'], a['tf'], a['posmode']))
                 if u.path == '/api/notes':        # K 线上的备注：事件日、新闻标题、联网搜到的、手写的，以及各自的时效
-                    return self._send(200, notes.payload(q.get('ticker', ''), q.get('asof') or None))
+                    return self._send(200, notes.payload(q.get('ticker', ''), asof_of(q, q.get('ticker'))))
                 if u.path == '/api/learn':        # 「一键解释」：把这一天的结果讲成大白话，不调用 AI
                     a = prof(q)
-                    return self._send(200, learn.build(q.get('ticker', ''), a['model'], q.get('asof') or None, a['side'], a['horizon'], a['tf']))
+                    return self._send(200, learn.build(q.get('ticker', ''), a['model'], asof_of(q, q.get('ticker')), a['side'], a['horizon'], a['tf']))
                 if u.path == '/api/quant':
-                    a = prof(q, 'houshou')
-                    return self._send(200, quant.result(q.get('ticker', ''), a['model'], q.get('asof') or None, a['side'], a['horizon'], a['tf'], a['posmode']))
+                    t, a = q.get('ticker', ''), prof(q, 'houshou')
+                    asof = asof_of(q, t)
+                    r = quant.result(t, a['model'], asof, a['side'], a['horizon'], a['tf'], a['posmode'])
+                    if asof and r['asof'] != asof:          # 休市日或周 K 中间的日子：用的是之前最近的一根，写明
+                        r.update(asof_requested=asof, asof_note=f'{asof} 没有{"" if a["tf"] == "D" else "周 "}K 线（休市、在最新一根之后，或在一周中间），用的是它之前最近的一根：{r["asof"]}。')
+                    return self._send(200, r)
                 if u.path == '/api/quant/models':
                     return self._send(200, model_library())
                 if u.path == '/api/quant/scan':
@@ -634,15 +678,21 @@ class Handler(BaseHTTPRequestHandler):
                     conv = chat.load(q.get('id', ''))
                     return self._send(200, dict(ok=True, conv=chat.public(conv)) if conv else dict(ok=False, error='没有这段对话。'))
                 if u.path == '/api/ai/cached':
-                    return self._send(200, ai_cached(q.get('ticker', ''), q.get('asof') or None))
+                    return self._send(200, ai_cached(q.get('ticker', ''), asof_of(q, q.get('ticker'))))
                 if u.path == '/api/state':
-                    st = panel.state_at(q.get('ticker', ''), q.get('asof') or None)
+                    st = panel.state_at(q.get('ticker', ''), asof_of(q, q.get('ticker')))
                     st['card'] = narrate.card_from_state(st, panel.backtest_summary())     # 规则模型卡片：只来自引擎
                     saved = ai_variants(st['ticker'], st['asof'])       # 这一天保存过 Claude 解说的组合：切换模型或方向不清空
                     st['ai_saved'] = dict(four='' in saved, houshou='houshou' in saved, any=bool(saved), variants=saved)
                     return self._send(200, st)
                 if u.path == '/api/portfolio':
                     return self._send(200, portfolio.payload())
+                if u.path == '/api/rules':                 # 我的规则（他自己写的，AI 对话照着推演）
+                    text, saved = mine.rules()
+                    return self._send(200, dict(ok=True, text=text, saved=saved))
+                if u.path == '/api/notify':                # 提醒的设定，和今天自动联网用了几次
+                    return self._send(200, dict(ok=True, settings=mine.notify_settings(), auto_web_used=mine.auto_web_used(),
+                                                auto_web_daily=int(CFG.get('ai_chat_auto_web_daily', 3))))
                 if u.path == '/api/portfolio/version':
                     st, err = portfolio.read_state()
                     age = None if err else portfolio.age_hours(st.get('asof_taipei'))
@@ -654,7 +704,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(404, dict(ok=False, error='没有这份快照。'))
                     return self._send(200, dict(ok=True, name=q.get('name'), text=txt))
                 if u.path == '/api/avwap':
-                    return self._send(200, panel.manual_avwap(q.get('ticker', ''), q.get('anchor', ''), q.get('asof') or None))
+                    return self._send(200, panel.manual_avwap(q.get('ticker', ''), q.get('anchor', ''), asof_of(q, q.get('ticker'))))
                 return self._send(404, dict(ok=False, error='没有这个接口。'))
             rel = 'index.html' if u.path in ('/', '') else 'terminal.html' if u.path == '/terminal' else u.path.lstrip('/')
             if rel.startswith('static/'):
@@ -669,6 +719,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), ctype)
         except KeyError:
             return self._send(404, dict(ok=False, error='没有这个标的。'))
+        except ValueError as e:     # 参数不对（quant.BadParam 写明是哪个参数、可选什么）：400，不悄悄换成别的
+            return self._send(400, bad_request(e))
         except BrokenPipeError:
             pass
         except Exception as e:      # noqa: BLE001
@@ -694,8 +746,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, ai_narrate(body.get('ticker', ''), body.get('asof') or None, a['model'], a['side'], a['horizon'], a['tf'], a['posmode']))
             if u.path == '/api/chat/send':
                 return self._chat_send(body)
-            if u.path == '/api/chat/explain':
-                return self._send(200, chat_explain(body))
             if u.path == '/api/chat/delete':
                 return self._send(200, dict(ok=True, removed=chat.delete(body.get('id', ''))))
             if u.path == '/api/notes/manual':
@@ -721,6 +771,15 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise ValueError('不认识的操作。')
                 return self._send(200, tasks.listing(force=op == 'resume'))
+            if u.path == '/api/rules':
+                return self._send(200, dict(ok=True, text=mine.save_rules(body.get('text'))))
+            if u.path == '/api/portfolio/ignore':      # 忽略这一笔：记在 data/quant/，不碰持仓文件
+                return self._send(200, dict(ok=True, ignored=mine.set_ignored(body.get('key'), bool(body.get('ignore', True)))))
+            if u.path == '/api/notify':
+                return self._send(200, dict(ok=True, settings=mine.save_notify(body.get('mac'), body.get('imessage'))))
+            if u.path == '/api/notify/test':           # 他点「发一条测试」才发
+                went = mine.send('test', '这是一条测试提醒：盯盘任务条件齐了、收盘碰到你的线时，会这样提醒你。', '这是一条测试提醒，收到就说明能推到手机。', force=True)
+                return self._send(200, dict(ok=True, sent=went))
             if u.path == '/api/quant/run':            # 分析记录：点一次「AI 分析当前图表」记一行
                 return self._send(200, dict(ok=True, run=tasks.log_run(body, body.get('ai'))))
             if u.path == '/api/quant/runs/clear':
@@ -729,7 +788,7 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError:
             return self._send(404, dict(ok=False, error='没有这个标的。'))
         except ValueError as e:
-            return self._send(400, dict(ok=False, error=str(e) or '请求不对。'))
+            return self._send(400, bad_request(e))
         except BrokenPipeError:
             pass
         except Exception as e:      # noqa: BLE001
@@ -758,7 +817,29 @@ def main():
     url = f'http://localhost:{port}'
     print(f'四要素面板已启动：{url}', flush=True)
     print(f'AI 解读：{"可用，模型 " + CFG["ai_model"] if ok else "不可用。" + why}', flush=True)
-    threading.Thread(target=lambda: [panel.load(t) for t in panel.TICKERS], daemon=True).start()
+    def warm():         # 先把数据读进来；再把后手在全部样本上的触发次数算好（模型页要用，第一次要算几秒）
+        for t in panel.TICKERS:
+            panel.load(t)
+        try:
+            quant.houshou_sample()
+        except Exception:       # noqa: BLE001
+            pass
+    threading.Thread(target=warm, daemon=True).start()
+
+    def watch():        # 每 10 分钟看一眼：有新 K 线了（定时刷新是另一个进程做的），就把盯盘任务和线的提醒过一遍
+        seen = None
+        time.sleep(60)
+        while True:
+            try:
+                key = tuple(panel.load(t)['B']['d'][-1] for t in panel.TICKERS)
+                if key != seen:
+                    tasks.listing(check=True)
+                    tasks.line_alerts()
+                    seen = key
+            except Exception:       # noqa: BLE001  检查失败下一轮再来，不影响面板
+                pass
+            time.sleep(600)
+    threading.Thread(target=watch, daemon=True).start()
     if os.environ.get('FE_OPEN') == '1':                  # ./start.sh 在终端里运行时自动打开浏览器
         import webbrowser
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()

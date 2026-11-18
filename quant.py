@@ -109,16 +109,48 @@ _lock = threading.RLock()
 _P = {}
 
 
+class BadParam(ValueError):
+    """A value the panel doesn't know. The server answers 400 and names the parameter and what it can be:
+    it never quietly runs another model, horizon, side, bar size or position instead."""
+
+    def __init__(self, name, value, allowed=(), why=''):
+        self.name, self.value, self.allowed = name, '' if value is None else str(value), [str(x) for x in allowed]
+        super().__init__(f'参数 {name}={self.value or "（空）"} 不认识。' + (why or '') + ('可选：' + '、'.join(self.allowed) + '。' if self.allowed else ''))
+
+
+def given(x):
+    """Was this input actually sent? (missing and empty both mean “use the default”)."""
+    return x is not None and str(x).strip() != ''
+
+
 def norm(model=None, side=None, horizon=None, tf=None, posmode=None):
-    """Clean the five inputs. Unknown values fall back to the defaults; an unknown model is an error."""
+    """Check the five inputs. A missing one takes its default (side long, horizon 20, bar size D, position auto); a value that is sent
+    but not known raises BadParam. The model is required here (the server fills in its default before calling)."""
     if model not in MODEL:
-        raise ValueError('没有这个模型')
-    try:
-        horizon = int(horizon)
-    except (TypeError, ValueError):
+        raise BadParam('model', model, MODEL)
+    if not given(side):
+        side = 'long'
+    elif side not in SIDE_NAME:
+        raise BadParam('side', side, SIDE_NAME)
+    if not given(horizon):
         horizon = 20
-    return dict(model=model, side='short' if side == 'short' else 'long', horizon=horizon if horizon in HORIZONS else 20,
-                tf='W' if tf == 'W' else 'D', posmode=posmode if posmode in POS_MODES else 'auto')
+    else:
+        try:
+            n = int(str(horizon).strip())
+        except ValueError:
+            raise BadParam('hz', horizon, HORIZONS) from None
+        if n not in HORIZONS:
+            raise BadParam('hz', horizon, HORIZONS)
+        horizon = n
+    if not given(tf):
+        tf = 'D'
+    elif tf not in TF_NAME:
+        raise BadParam('tf', tf, TF_NAME)
+    if not given(posmode):
+        posmode = 'auto'
+    elif posmode not in POS_MODES:
+        raise BadParam('pos', posmode, POS_MODES)
+    return dict(model=model, side=side, horizon=horizon, tf=tf, posmode=posmode)
 
 
 def variant(model, side='long', horizon=20, tf='D'):
@@ -181,7 +213,8 @@ def set_anchor(t, date, side='long', tf='D'):
     """date = a bar of this ticker (at this bar size), or None to go back to the automatic anchor."""
     if t not in panel.TICKERS:
         raise KeyError(t)
-    side, tf = ('short' if side == 'short' else 'long'), ('W' if tf == 'W' else 'D')
+    a = norm('houshou', side, None, tf, None)          # 不认识的方向或 K 线级别：报错，不悄悄改成做多或日 K
+    side, tf = a['side'], a['tf']
     cur = anchors()
     k = akey(t, side, tf)
     if date:
@@ -257,8 +290,13 @@ def _pct(x, price):
     return None if x is None or not price else round((x / price - 1) * 100, 2)
 
 
+def fmt_p(x):
+    """A price as the page writes it (same as fmtP() in app.js): two decimals from 1 up, four below 1."""
+    return '—' if x is None else f'{x:,.2f}' if abs(x) >= 1 else f'{x:.4f}'
+
+
 def _cells(price, zone, mid, stop, t1, rr, t2, t2_note='', core=False, entry_note='中值'):
-    f = lambda x: '—' if x is None else f'{x:,.2f}'
+    f = fmt_p
     sp = lambda x: '' if x is None else f'{x:+.2f}% · 距现价'
     return [dict(k='price', name='现价', v=f(price), sub='当前图表'),
             dict(k='zone', name='入场区间', v=f'{f(zone[0])} – {f(zone[1])}' if zone else '—', sub=f'{entry_note} {sp(_pct(mid, price))}' if zone and mid else '条件没齐，不给区间'),
@@ -268,13 +306,14 @@ def _cells(price, zone, mid, stop, t1, rr, t2, t2_note='', core=False, entry_not
             dict(k='t2', name='第二目标', v=f(t2), sub=(sp(_pct(t2, price)) + (' · ' + t2_note if t2_note else '')) if t2 is not None else t2_note, tone='target')]
 
 
-HS_STATE = {'下后手': 'ready', '等': 'wait', '不追': 'avoid', '不追·出货区': 'avoid', '出货区': 'avoid', '还能看': 'wait', '不适用': 'na', '已失效': 'dead'}
+HS_STATE = {'下后手': 'ready', '等': 'wait', '不追': 'avoid', '不追·出货区': 'avoid', '出货区': 'avoid', '还能看': 'wait', '不适用': 'na', '已失效': 'dead',
+            hs.TOO_FINE: 'na'}
 VERDICT_TEXT = {'下后手': '后手条件齐了（未回测）', '等': '等', '不追': '不追', '不追·出货区': '不追 · 出货区', '出货区': '出货区', '还能看': '还能看',
-                '不适用': '这套清单用不上', '已失效': '结构已失效'}
+                '不适用': '这套清单用不上', '已失效': '结构已失效', hs.TOO_FINE: '价位太细，不给价位'}
 VERDICT_TEXT_SHORT = {'下后手': '后手做空条件齐了（未回测）', '等': '等', '不追': '不追空', '不追·出货区': '不追空 · 接货区', '出货区': '接货区', '还能看': '还能看',
-                      '不适用': '这套清单用不上', '已失效': '结构已失效'}
+                      '不适用': '这套清单用不上', '已失效': '结构已失效', hs.TOO_FINE: '价位太细，不给价位'}
 HS_PHASE_SHORT = {'拉升中': '下跌中', '回落中': '反弹中'}
-BO_STATE = {'条件齐': 'ready', '等受阻': 'wait', '等反抽': 'wait', '不追': 'avoid', '等破位': 'wait', '不适用': 'na', '已失效': 'dead'}
+BO_STATE = {'条件齐': 'ready', '等受阻': 'wait', '等反抽': 'wait', '不追': 'avoid', '等破位': 'wait', '不适用': 'na', '已失效': 'dead', hs.TOO_FINE: 'na'}
 FOOT = '历史数据重放｜未回测｜仅供学习'
 
 
@@ -289,6 +328,8 @@ def houshou_card(r, pos, side='long', hz=20, tf='D'):
     back = '回落' if long else '反弹'
     if v == '下后手':
         text = f'价格回到成本线，两段{W["down"]}幅相当，缩量刺破后收回，后手清单三项同时成立。这套规则没有回测过，这里只是把清单结果摆出来。'
+    elif v == hs.TOO_FINE:
+        text = r['note']
     elif r['phase'] == '回落中':
         text = f'三{W["push"]}之后在{back}，后手清单 {sum(c["ok"] for c in r["checks"])}/3。' + ('还缺：' + '、'.join(c['name'] for c in r['checks'] if not c['ok']) + '。')
     elif r['phase'] == '拉升中':
@@ -325,7 +366,7 @@ def breakout_card(r, pos, side='short', hz=20, tf='D'):
         text = f'{W["brk"]}之后已经走出去 {far}%，离{W["brk"]}处太远。按规则不追，等它{W["back"]}。'
     elif v == '等破位':
         text = f'离现价最近的{W["level"]}在 {lv["price"]}（被碰过 {lv["touches"]} 次），收盘还没有{W["brk_v"]}它。没有{W["brk"]}，就没有后面的{W["back"]}。'
-    elif v == '已失效':
+    elif v in ('已失效', hs.TOO_FINE):
         text = r['note']
     else:
         text = r['note'] + '这套清单今天用不上，不代表没有机会或没有风险。'
@@ -374,12 +415,16 @@ def four_t2(st):
 
 
 def four_card(st, hz=20, pos=None):
+    """The six cells for the four-evidence model. Until all four are lit (state ready) every price cell is “—”: the engine still works out
+    where the stop and the prior high would be, but those are structure levels, not a plan, and are not shown as one."""
     cd = st['card']
-    zone, core = cd['entry_zone'], bool(pos and pos['core'])
+    ready, core = bool(st['all4']), bool(pos and pos['core'])
+    zone = cd['entry_zone'] if ready else None
     t2 = four_t2(st) if zone else None
-    return dict(model='四证·抄底 v1.0', verdict=cd['verdict'], code=cd['code'], state='ready' if st['all4'] else 'wait' if st['armed'] else 'na',
+    return dict(model='四证·抄底 v1.0', verdict=cd['verdict'], code=cd['code'], state='ready' if ready else 'wait' if st['armed'] else 'na',
                 tags=[cd['direction'], horizon_label(hz), '引擎结果'], text=st['conclusion']['text'],
-                cells=_cells(cd['price'], zone, (zone[0] + zone[1]) / 2 if zone else None, None if core and zone else cd['stop'], cd['target'], cd['rr'], t2,
+                cells=_cells(cd['price'], zone, (zone[0] + zone[1]) / 2 if zone else None, None if core or not ready else cd['stop'], cd['target'] if ready else None,
+                             cd['rr'] if ready else None, t2,
                              ('跌幅的一半【估算】' if t2 is not None else '跌幅的一半不比第一目标高，不设') if zone else '条件没齐，不给目标', core=core and zone is not None),
                 footer=cd['footer'])
 
@@ -538,27 +583,32 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
         else:
             st['card'] = __import__('narrate').card_from_state(st, panel.backtest_summary())
             sg = st['signal']
-            zone = st['card']['entry_zone']
+            ready = bool(st['all4'])          # 四项没齐：引擎照样算出止损、前高这些结构位，但它们不是交易价位，这里一律给 null
+            zone = st['card']['entry_zone'] if ready else None
             sig = dict(phase='已触发' if st['armed'] else '未触发', phase_text='已触发' if st['armed'] else '未触发', verdict=st['conclusion']['title'],
-                       verdict_text=st['card']['verdict'], list='four', state='ready' if st['all4'] else 'wait' if st['armed'] else 'na',
+                       verdict_text=st['card']['verdict'], list='four', state='ready' if ready else 'wait' if st['armed'] else 'na',
                        checks=[dict(k=e['k'], name=e['name'], ok=bool(e['lit']), why=e['text']) for e in st['evidence']],
                        missing=list(st['conclusion']['missing']), next_needs=[], note=st['conclusion']['text'],
                        anchor=dict(date=st['levels']['anchor_date'], by='auto', note='地量日') if st['levels']['anchor_date'] else None,
-                       zone=zone, mid=hs.r2((zone[0] + zone[1]) / 2) if zone else None, stop=hs.r2(sg['stop']), stop_note='规则止损',
-                       t1=hs.r2(sg['target']) if sg['target_usable'] else None, t2=four_t2(st) if zone else None,
-                       t2_note='跌幅的一半【估算】' if zone else '条件没齐，不给目标', rr=sg['rr'])
+                       zone=zone, mid=hs.px((zone[0] + zone[1]) / 2) if zone else None, stop=hs.px(sg['stop']) if ready else None,
+                       stop_note='规则止损' if ready else '条件没齐，不给止损',
+                       t1=hs.px(sg['target']) if ready and sg['target_usable'] else None, t2=four_t2(st) if zone else None,
+                       t2_note='跌幅的一半【估算】' if zone else '条件没齐，不给目标', rr=sg['rr'] if ready else None)
             why = [x['why'] for x in st['signals']]
             hist = dict(n=len(why), rows=[], note='四证的历史信号见「模型」页', hold=panel.F['max_hold'],
                         outcomes=dict(target=sum(1 for x in why if x == 'target'), stop=sum(1 for x in why if x.startswith('stop')),
                                       none=sum(1 for x in why if x != 'target' and not x.startswith('stop'))))
             card, name, version = four_card(st, hz, pos), '四证·抄底 v1.0', 'four-1.0'
-            lines += structure.four_lines(PL, st)
+            lines += [x for x in structure.four_lines(PL, st) if ready or x['id'] != 'four_stop']     # 没齐：扇线、成本线照画，止损线不当价位给出去
             # 四证自己的止损、成本线、第一目标由「自动画」那一层画；这里只补第二目标这一条参考线
             if sig['t2'] is not None:
                 lines.append(dict(id='t2', kind='level', group='model', label='第二目标', price=sig['t2'], style='target2'))
         if model != 'four':
             lines += plan_lines(sig, core, side)
         sig.update(side=side, side_name=side_name(M, side))
+        # 「到这一天为止从没触发」和「全部样本上从没触发」是两回事：只有看最新一根时，才能说后一句（回放到过去时不提之后的事）
+        hist['scope'] = '全部样本' if is_latest else '到这一天为止'
+        hist['never'] = bool(is_latest and side_ok and tf_ok and not hist['n'])
         t2 = time.perf_counter()
         leg = legend(model, sig, lines, core, side, st if model == 'four' else None, model_legend if M.get('mod') and side_ok and tf_ok else None)
         week = None
@@ -580,6 +630,49 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
                     explain=EXPLAIN, banner=BANNER,
                     direction=dict(long='long' in M['sides'], short='short' in M['sides'], short_note='' if 'short' in M['sides'] else M.get('no_short', '')),
                     timeframe='日线' if tf == 'D' else '周线')
+
+
+_HS_SAMPLE = {}
+
+
+def houshou_sample():
+    """后手清单在每只标的、每个方向的全部日线上触发过几次、各项单独成立过多少根（自动锚点，和面板默认一样）。数据变了才重算。"""
+    out = []
+    with _lock:
+        for t in panel.TICKERS:
+            for side in hs.SIDES:
+                _, P = prepared(t, side, 'D')
+                key = (P['n'], P['d'][-1])
+                hit = _HS_SAMPLE.get((t, side))
+                if hit is None or hit[0] != key:
+                    h = hs.history(P, P['n'] - 1)
+                    hit = _HS_SAMPLE[(t, side)] = (key, dict(ticker=t, side=side, n=h['n'], bars=P['n'], first=P['d'][0], last=P['d'][-1], stats=h['stats']))
+                out.append(hit[1])
+    return out
+
+
+def houshou_sample_notes():
+    """模型页上的几句：后手在全部样本上触发过几次、卡在哪一项。都是现算的，数据变了说法跟着变。"""
+    S = houshou_sample()
+    last, names = max(x['last'] for x in S), '、'.join(panel.TICKERS)
+    hit = [x for x in S if x['n']]
+    if hit:
+        lines = [f'在 {names} 现有的全部日线上（截至 {last}），后手清单三项同时成立过：' + '、'.join(f'{x["ticker"]} {SIDE_NAME[x["side"]]} {x["n"]} 次' for x in hit) + '。']
+    else:
+        lines = [f'在 {names} 现有的全部日线上（做多、做空都算，截至 {last}），后手清单一次都没有三项同时成立过：条件齐 0 次。'
+                 '这和信号卡上的「这套清单用不上」不是一回事：那一句只说今天，这一句说的是全部历史。']
+    tot = {k: sum(x['stats'].get(k, 0) for x in S) for k in ('fall', 'B1', 'B2', 'B3', 'two_of_three')}
+    lines.append(f'这几只标的、两个方向合计：三冲之后的回落（做空是三探之后的反弹）共 {tot["fall"]} 根 K 线，其中回到成本线 {tot["B1"]} 根、AB=CD {tot["B2"]} 根、'
+                 f'缩量刺破收回 {tot["B3"]} 根，至少两项同时成立 {tot["two_of_three"]} 根。')
+    if not hit and tot['fall'] and tot['B3'] < min(tot['B1'], tot['B2']):
+        lines.append('最难过的是第三项「缩量刺破收回」：同一天要盘中刺破成本线又收回，成交量还要缩到下跌段的一半以下（一半是录屏原话的数）。'
+                     '这几只标的的日线上，前两项成立的那些天，这两件事从没凑到同一天。规则没有为了让它出信号而放宽。')
+    bare = [x for x in S if x['side'] == 'long' and not any(y['stats'].get('fall') for y in S if y['ticker'] == x['ticker'])]
+    if bare:
+        lines.append('、'.join(x['ticker'] for x in bare) + ' 的日线还太短（' + ('只有 %d 根' % bare[0]['bars'] if len(bare) == 1 else '、'.join(f'{x["ticker"]} 只有 {x["bars"]} 根' for x in bare)) +
+                     '），两个方向都还没走出过三冲（三探）之后的回撤，清单轮不到。')
+    lines.append('能触发的路径用合成 K 线锁在测试里（做多、做空各一条）：以后改代码要是让它在合成数据上也触发不了，测试会失败。')
+    return lines
 
 
 def scan_cell(t, model, side, horizon=20, tf='D', asof=None):

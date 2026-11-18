@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """后手·成本线回踩 规则引擎 houshou-0.2（APP_ADDENDUM_QUANT_AI.md §3）。因果，未回测。做多、做空两侧。
+没有回测过。照录屏「后手战法」的五条总结重写，不是原作者的代码。
+在 SPCX、NVDA、QQQ 现有的全部日线上（做多、做空），后手清单一次都没有三项同时成立过：SPCX 只有一百来根日线，三冲结构还没成形；
+NVDA 和 QQQ 卡在第三项「缩量刺破收回」——刺破又收回的那几天，量都没缩到下跌段的一半（录屏原话的数），量缩到一半的那几天又没刺破收回。
+规则没有为此放宽。能触发的路径用合成 K 线锁在测试里（tests/test_houshou.py 做多、tests/test_quant2.py 做空）。
 
 把 TradingVane 第二段录屏（量化AI | 后手战法 | 量化对抗量化）的五条总结写成代码，只用于观察，不是买卖依据。
 用法：
@@ -63,6 +67,42 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def r2(x):
     return None if x is None or not np.isfinite(x) else round(float(x), 2)
+
+
+def px(x):
+    """A price rounded the way the page shows it: two decimals from 1 up, four below 1 (early split-adjusted prices are a few cents).
+    Prices that go into a result pass through this, so the numbers in the reply are the numbers on the screen."""
+    if x is None or not np.isfinite(x):
+        return None
+    v = float(x)
+    return round(v, 2) if abs(v) >= 1 else round(v, 4)
+
+
+TOO_FINE = '价位太细'      # 清单都成立了，但价位在显示的位数下分不开：不算条件齐，不给价位和盈亏比
+PLAN_TOL = 0.05            # 用显示出来的价格重算的盈亏比，和用原始价格算的，最多差 5%
+
+
+def plan_check(s, mid, stop, t1=None):
+    """Can this plan be shown honestly? mid / stop / t1 are working-direction prices before rounding (stop below mid, t1 above it, on
+    both sides). Returns '' when it can, otherwise the reason in one plain phrase. The reward/risk itself is always worked out from the
+    unrounded prices; this only checks that the rounded prices on the screen still tell the same story:
+      - 入场中值在止损外侧（分母大于 0）；
+      - 按页面显示的位数四舍五入以后，入场中值和止损还分得开，第一目标和入场中值也分得开；
+      - 用显示出来的价格重算的盈亏比，和用原始价格算的相差不超过 PLAN_TOL。"""
+    if not mid > stop:
+        return '入场中值没有在止损外侧，盈亏比的分母不是正数'
+    dm, ds = s * px(s * mid), s * px(s * stop)
+    if not dm > ds:
+        return f'按显示的位数，入场中值 {px(s * mid)} 和止损 {px(s * stop)} 分不开'
+    if t1 is None or not t1 > mid:
+        return ''
+    dt = s * px(s * t1)
+    if not dt > dm:
+        return f'按显示的位数，入场中值 {px(s * mid)} 和第一目标 {px(s * t1)} 分不开'
+    rr, rd = (t1 - mid) / (mid - stop), (dt - dm) / (dm - ds)
+    if abs(rd - rr) > PLAN_TOL * rr:
+        return f'用显示的价格算盈亏比是 {rd:.2f}，用原始价格算是 {rr:.2f}，相差 {abs(rd / rr - 1) * 100:.0f}%，显示的位数装不下这么细的价位'
+    return ''
 
 
 def pct(x, nd=1):
@@ -230,7 +270,7 @@ def _core(P, j, am):
     d, o, h, l, c, v = P['d'], P['o'], P['h'], P['l'], P['c'], P['v']
     pi, pp, pk, pat = P['pi'], P['pp'], P['pk'], P['pat']
     s, W = P['s'], P['W']
-    R = lambda x: r2(s * x)
+    R = lambda x: px(s * x)
     span = lambda a, b: (R(a), R(b)) if s == 1 else (R(b), R(a))       # 两个价位，按真实价格从小到大
     k = bisect.bisect_right(pat, j)                    # 到第 j 根为止已确认的摆动点个数
     win0 = max(0, j - EST['top_win'] + 1) if am is None else am
@@ -423,9 +463,14 @@ def _core(P, j, am):
                missing=[x['name'] + '：' + x['why'] for x in checks if not x['ok']], _A=Ti, _Aat=pat[Tm], _all3=bool(all3))
     if all3:
         z1, z2, stop = dn(av, EST['zone']), up(av, EST['zone']), dn(float(l[Di]), VIDEO['stop'])
-        t2 = float(l[Di]) + EST['t2_ext'] * (Ap - float(l[L0]))          # 第二目标【估算】：从 D 点再量 2 倍这一轮（起涨低点到第三冲高点）的幅度
-        out.update(zone=list(span(z1, z2)), mid=R(av), stop=R(stop), t1=R(Ap), t2=R(t2), rr=r2((Ap - av) / (av - stop)) if av > stop else None)
-        out['_stop'] = stop
+        bad = plan_check(s, av, stop, Ap)
+        if bad:          # 三项都成立，但价位在显示的位数下分不开：不算条件齐，不给价位
+            out.update(verdict=TOO_FINE, _all3=False, next_needs=[],
+                       note=f'后手清单三项都成立，但{bad}。这一次不算条件齐，也不给价位和盈亏比。')
+        else:
+            t2 = float(l[Di]) + EST['t2_ext'] * (Ap - float(l[L0]))          # 第二目标【估算】：从 D 点再量 2 倍这一轮（起涨低点到第三冲高点）的幅度
+            out.update(zone=list(span(z1, z2)), mid=R(av), stop=R(stop), t1=R(Ap), t2=R(t2), rr=r2((Ap - av) / (av - stop)))
+            out['_stop'] = stop
     memo[j] = out
     return out
 
@@ -444,7 +489,7 @@ def evaluate(P, j, am=None):
                 broke = next((x for x in range(q + 1, j + 1) if P['c'][x] < rq['_stop']), None)
                 if broke is not None:
                     r.update(phase='已失效', verdict='已失效', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[],
-                             note=f'{P["d"][q]} 条件齐过一次，{P["d"][broke]} 收盘{P["W"]["pierce"]}了当时的止损 {r2(P["s"] * rq["_stop"])}，这个结构作废。')
+                             note=f'{P["d"][q]} 条件齐过一次，{P["d"][broke]} 收盘{P["W"]["pierce"]}了当时的止损 {px(P["s"] * rq["_stop"])}，这个结构作废。')
                 break
     return r
 

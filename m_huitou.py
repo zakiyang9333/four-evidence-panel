@@ -31,7 +31,7 @@ VIDEO_NOTE = dict(half='半山腰：这一段走过的多少')
 EST = dict(big_atr=2.5, look=40, pre=10)
 EST_NOTE = dict(big_atr='大阴大阳：振幅至少几个 ATR', look='只在最近多少根里找', pre='往前看几根找那一段的起点')
 REFS = ('锚定 VWAP（Brian Shannon），录屏卡片：线上看多，线下看空', '斐波那契回撤 0.5（半山腰）')
-NOTES = ('观察用：只告诉你价格和半山腰、成本线的关系，不给入场价位。', '没有回测过。照录屏的四条要点重写。')
+NOTES = ('观察用：只告诉你价格和半山腰、成本线的关系，不给入场价位。', '没有回测过。照录屏的四条要点重写，不是原作者的代码。')
 
 LEARN = dict(
     long=dict(idea_title='“等回头”在看什么？',

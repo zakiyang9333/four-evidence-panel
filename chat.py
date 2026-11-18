@@ -13,6 +13,7 @@ import re
 import secrets
 import time
 
+import mine
 import panel
 
 MAX_TEXT = 4000
@@ -22,22 +23,32 @@ SYSTEM = """你是「四要素观察面板」里的 AI 助手。使用者一边�
 你会看到的东西：
 - 用户的消息前面有时带一段【图表数据】。那是面板在那一刻用代码算好的结果：规则引擎的结论、最近 60 根日线、评分表盘、所选规则模型的清单、图上的结构线、K 线上的备注（财报日、新闻、联网搜到的、他手写的）、当天保存的 AI 解读，有时还有他在这只标的上的相关仓位。对话里可能出现好几段（他换了标的或日期），回答关于“现在这张图”的问题时，以最近的一段为准。
 - 图表数据的 quant.setup 写着他现在选的方向（做多或做空）、周期、K 线级别和持仓（可能只是他的假设）。方向是做空时，清单是所选模型做空一侧的；模型没有这一侧的规则时会写明“用不上”，照实说，不要替它编。quant.plan 是清单齐了才有的计划价位，第二目标是估算的。
-- 有时对话里有一条【一键解释】：那是面板用程序拼出来的大白话说明，一张张带编号的卡片。他如果问“第几张没看懂”，指的就是它。
+- 看最新一根、持仓选“跟随账户”时，图表数据里可能有 mine：他自己的线（my_lines，比如归零线、−10% 缓冲线，都是估算）、估值参考（valuation_refs）、这只标的上的挂单（open_orders）、他检查清单里点名这只的几条（checklist）。只有这一只的，不是整个账户。
+- 系统提示最后附着【我的规则】：他自己写的规则，随时会改。
 
 怎么回答：
-- 先给结论，再给理由。短句。一般三到六句话就够；他要你展开、要对比、要一步步讲的时候再写长。
-- 说人话：8 岁小孩也能听懂，但语气是对成年人说话，不装可爱。术语第一次出现时顺手解释一句，能用生活里的比方就用。
-- 可以用 Markdown（加粗、列表、表格），只在它确实让内容更好读的时候用。
-- 数字只用图表数据里有的，或者能从里面直接算出来的；算的时候说清楚是怎么算的。日期只用数据里有的交易日。
-- 和这张图无关的一般性问题（指标是什么意思、某种形态怎么看、风险怎么控制）也照常回答。
+- 第一句就是结论，直接回答他问的那件事。后面最多三条理由，每条一句；用到数字时只给最关键的一两个。
+- 他说“展开”、要对比、要一步步讲的时候，再写长。
+- 不复述他的问题，不客套，不在结尾重复“不构成投资建议”“仅供参考”之类的话：面板上已经写着了。
+- 说人话：8 岁小孩也能听懂，但语气是对成年人说话，不装可爱。术语第一次出现时顺手解释一句。
+- 能不用 Markdown 就不用；几条理由可以写成 1. 2. 3.。不用标题；表格只在他要对比的时候用。
+- 数字只用图表数据里有的，或者能从里面直接算出来的；日期只用数据里有的交易日。
+- 和这张图无关的一般性问题（指标是什么意思、某种形态怎么看）也照常回答，一样短。
 
 几条边界：
 1. 规则引擎的结论（哪一项成立、几比几、算不算信号）是代码算的，你不能改。你可以解释它、指出它的局限。规则是写死的，市场不会照着清单走：清单明显跟不上眼前走势时，直接说。
-2. 新闻和原因：你只知道备注里写了的。没有备注的日子，你不知道那天发生了什么，直接说不知道，不要猜。如果这次请求开了联网搜索，可以去查，查到的要说明出处。
-3. 不给具体的买卖指令，不替他决定仓位。有仓位数据时遵守他的规则：核心仓按估值失效，没有价格止损；战术单四要素不到 4/4 不开。可以帮他把利弊和要看的条件摆清楚，决定由他自己做。
-4. 这些规则没有被证明管用（四要素回测证据不足，后手战法没回测过）。他问“该不该买”时，要把这一点说在前面。
+2. 新闻和原因：你只知道备注里写了的。没有备注的日子，你不知道那天发生了什么，直接说不知道，不要猜。如果这次请求开了联网搜索（他勾了，或者问的是原因、新闻时自动开的），可以去查，查到的要说明出处。
+3. 不发指令、不替他做决定：不说“买”“卖”“加仓”“减仓”“把挂单改到某个价”这类话，也不替他定仓位。他问挂单、止损、要不要调、到没到线时，照【我的规则】一条条推演：现价在哪；他的挂单和线（mine 里的）各在哪、离现价多远（写出百分比）；他的规则怎么说、碰到哪条算触发。最后一句写“改不改由你定”。规则里没写的情形，就说“你的规则没写这种情况”，不要替他补。
+4. 可以有你自己的看法：在规则的结论之外，可以另起一句“我自己的看法：……”，说趋势是在加强还是减弱、哪里是关键位置。标明这不是规则，理由只用图表数据和备注里有的。
+5. 凯利公式：他给了胜率和赔率时，可以算凯利比例和半凯利：f = p − (1 − p) ÷ b（p 是胜率，b 是赢一次赚的 ÷ 输一次亏的），把算式写出来；同时提醒胜率得他自己给，这里的规则都没回测过。他没给胜率时，不要编一个。
+6. 这些规则没有被证明管用（四要素回测证据不足，后手战法没回测过）。他问“该不该买”时，要把这一点说在前面，然后照第 3 条推演。
 
 用中文回答。"""
+
+
+def system():
+    """The system prompt with his own rules (mine.rules) appended at the end: changing the rules only changes this tail."""
+    return SYSTEM + '\n\n【我的规则】（他自己写的，随时会改。推演时一条条引用；没写的情形就说没写）\n' + mine.rules()[0].strip()
 
 
 def chat_dir():
@@ -86,7 +97,13 @@ def delete(cid):
         return False
 
 
+def is_card(m):
+    """An old 一键解释 message: program-built cards, not part of the conversation. Kept in the file, never shown, never sent."""
+    return m.get('kind') == 'explain'
+
+
 def listing(limit=60):
+    """Saved conversations, newest first. Ones with no question in them (only old 一键解释 cards) are left out of the list, not deleted."""
     out = []
     try:
         names = os.listdir(chat_dir())
@@ -95,9 +112,12 @@ def listing(limit=60):
     for n in names:
         if n.endswith('.json'):
             c = load(n[:-5])
-            if c and c['messages']:
+            asks = sum(1 for m in c['messages'] if m['role'] == 'user') if c else 0
+            if asks:
+                u = c.get('usage') or {}
                 out.append(dict(id=c['id'], title=c.get('title') or '新对话', updated=c.get('updated'), created=c.get('created'), ticker=c.get('ticker'),
-                                count=len(c['messages'])))
+                                count=sum(1 for m in c['messages'] if not is_card(m)), asks=asks,
+                                tokens=sum(int(u.get(k) or 0) for k in ('tokens_in', 'tokens_out', 'cache_read', 'cache_write'))))
     out.sort(key=lambda r: r['updated'] or '', reverse=True)
     return out[:limit]
 
@@ -107,21 +127,13 @@ def title_from(text):
     return (s[:22] + '…') if len(s) > 22 else (s or '新对话')
 
 
-def explain_text(lp):
-    """The one-click explanation as plain text, so later questions can refer to it (“第 3 张卡片”)."""
-    L = [f"【一键解释】{lp['ticker']} {lp['asof']} · {lp['model_name']}（程序按当天的计算结果拼的，不是 AI 写的）",
-         f"今天的一句话：{lp['headline']['text']}。{lp['headline']['sub']}"]
-    for n, c in enumerate(lp['cards'], 1):
-        L.append(f"{n}. {c['title']}\n{c['body']}" + (f"\n今天：{c['now']}" if c.get('now') else '') +
-                 ''.join(f"\n- {'是' if i['ok'] else '否'}，{i['name']} {i['text']}" for i in c.get('items') or []) + (f"\n注意：{c['note']}" if c.get('note') else ''))
-    return '\n\n'.join(L)
-
-
 def api_messages(conv):
-    """The stored conversation as the API wants it. Chart data rides in front of the user message it was attached to; a run of
-    assistant messages (an explanation followed by nothing, or two explanations) is merged so roles alternate."""
+    """The stored conversation as the API wants it. Chart data rides in front of the user message it was attached to. Old 一键解释
+    cards are skipped (they are not part of the conversation); a run of assistant messages is merged so roles alternate."""
     out = []
     for m in conv['messages']:
+        if is_card(m):
+            continue
         if m['role'] == 'user':
             blocks = []
             if m.get('context'):
@@ -135,8 +147,8 @@ def api_messages(conv):
             text = m.get('text') or ''
             if not text.strip():
                 continue
-            if not out:         # 对话不能以助手开头：一键解释是他点出来的，补一句他的话
-                out.append(dict(role='user', content=[dict(type='text', text='（我点了“一键解释”。）')]))
+            if not out:         # 对话不能以助手开头（存档出了岔子才会这样）：补一句占位的话
+                out.append(dict(role='user', content=[dict(type='text', text='（接着聊。）')]))
             if out[-1]['role'] == 'assistant':
                 out[-1]['content'][0]['text'] += '\n\n' + text
             else:
@@ -147,9 +159,12 @@ def api_messages(conv):
 
 
 def public(conv):
-    """What the page gets: everything except the raw chart data attached to user messages (it only needs to know one was attached)."""
+    """What the page gets: the conversation only (old 一键解释 cards stay in the file but are not sent), and no raw chart data
+    attached to user messages (it only needs to know one was attached)."""
     msgs = []
     for m in conv['messages']:
+        if is_card(m):
+            continue
         x = {k: v for k, v in m.items() if k != 'context'}
         x['has_context'] = bool(m.get('context'))
         msgs.append(x)

@@ -146,6 +146,117 @@
       $('#clearBtn').click(); await replayTo(d0);       // 周线来回一趟会把回放日落到周末，拨回原来那天
     }
 
+    // 2026-11-18 照录屏补的四项：笔刷组、锚定 VWAP 上下带、回放自动播放、技术指标库
+    {
+      const d0 = S.bars.d[S.asof], T = window.FEDraw, base = S.asof - 60, pr = i => S.bars.c[Math.max(0, Math.min(S.asof, i))];
+      const all = s => [...document.querySelectorAll(s)];
+      // 1) 笔刷组：菜单照录屏分三段（笔刷 / 箭头 / 形状），每个工具都真的能画
+      $('#tools [data-open=brush]').click();
+      const bm = $('.tb-menu[data-menu=brush]'), bk = all('.tb-menu[data-menu=brush] .tb-item[data-tool]').map(x => x.dataset.tool);
+      const want = ['brush', 'hilite', 'arrowmk', 'arrowln', 'arrowup', 'arrowdn', 'rect', 'rrect', 'path', 'circ', 'ellipse', 'polyline', 'tri3', 'arcsh', 'curve', 'dcurve'];
+      ok('brush_group_menu', !bm.hidden && ['笔刷', '箭头', '形状'].every(s => bm.textContent.indexOf(s) >= 0) && want.every(k => bk.indexOf(k) >= 0), bk);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      const bad2 = [];
+      for (const k of want.filter(k => T.tools[k].n > 0)) {
+        const n = T.tools[k].n, before = S.drawings.length;
+        $('#tools .tb-item[data-tool=' + k + ']').click();
+        for (let m = 0; m < n; m++) { const i = base + m * 8; click(i, pr(i) * (m % 2 ? 1.04 : 0.97)); }
+        if (S.drawings.length !== before + 1 || S.tool !== 'cursor' || S.drawings[before].type !== k) bad2.push(k);
+      }
+      let before = S.drawings.length;          // 路径：点三下再按回车
+      $('#tools .tb-item[data-tool=path]').click();
+      [0, 8, 16].forEach(m => click(base + m, pr(base + m) * (1 + m / 400)));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      if (!(S.drawings.length === before + 1 && S.drawings[before].type === 'path' && S.drawings[before].pts.length === 3)) bad2.push('path');
+      before = S.drawings.length;              // 折线：点三下，再点回第一个点就封口
+      $('#tools .tb-item[data-tool=polyline]').click();
+      [[0, 0.97], [10, 1.03], [20, 0.98]].forEach(([m, f]) => click(base + m, pr(base) * f)); click(base, pr(base) * 0.97);
+      if (!(S.drawings.length === before + 1 && S.drawings[before].type === 'polyline' && S.drawings[before].closed === true && S.drawings[before].pts.length === 3)) bad2.push('polyline');
+      before = S.drawings.length;              // 荧光笔：按住拖
+      $('#tools .tb-item[data-tool=hilite]').click();
+      const md = (t, i, p) => (t === 'mouseup' ? window : ov).dispatchEvent(new MouseEvent(t, evt(i, p)));
+      md('mousedown', base, pr(base)); for (let m = 1; m <= 6; m++) md('mousemove', base + m * 2, pr(base) * (1 + m * 0.01)); md('mouseup', base + 12, pr(base) * 1.06);
+      if (!(S.drawings.length === before + 1 && S.drawings[before].type === 'hilite' && S.drawings[before].pts.length >= 5)) bad2.push('hilite');
+      await frame();
+      ok('brush_group_tools_draw', bad2.length === 0, bad2);
+      $('#clearBtn').click();                  // 矩形：框里真的上了颜色
+      $('#tools .tb-item[data-tool=rect]').click(); click(base, pr(base) * 0.95); click(base + 20, pr(base) * 1.05); await frame();
+      ok('rect_fills_box', S.drawings.length === 1 && alphaAt(base + 10, pr(base)) > 0, alphaAt(base + 10, pr(base)));
+      document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyR', key: 'R', altKey: true, shiftKey: true, bubbles: true }));
+      ok('rect_shortcut', S.tool === 'rect', S.tool);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      $('#clearBtn').click();
+
+      // 2) 锚定 VWAP 上下带：中线是后端算的；带子按成交量加权的标准差（典型价），上下对称；第一根只有一根，带宽是 0
+      $('#tools .tb-item[data-tool=avwap]').click(); click(base, pr(base));
+      const vd = S.drawings[0];
+      await until(() => { const s = fe.avwapOf(vd); return s && s.values && s.values.length > 5; }, 8000);
+      const vs = fe.avwapOf(vd), vb = vs && fe.avwapBands(vs);
+      let vok = !!vb && vb.up.length === vs.values.length, vdet = null;
+      if (vok) {
+        const b = S.bars, K = vs.values.length - 1; let sv = 0, stv = 0, m = 0;
+        for (let k = 0; k <= K; k++) { const j = vs.anchor + k, tp = (b.h[j] + b.l[j] + b.c[j]) / 3; sv += b.v[j]; stv += tp * b.v[j]; }
+        m = stv / sv; let q = 0;
+        for (let k = 0; k <= K; k++) { const j = vs.anchor + k, tp = (b.h[j] + b.l[j] + b.c[j]) / 3; q += b.v[j] * (tp - m) * (tp - m); }
+        const sd = Math.sqrt(q / sv);
+        vdet = { mid: [m, vs.values[K]], sd: [sd, vb.up[K] - vs.values[K]], lo: vs.values[K] - vb.lo[K], first: [vb.up[0], vs.values[0]] };
+        vok = Math.abs(m - vs.values[K]) <= 1e-3 * Math.max(1, Math.abs(m)) && Math.abs((vb.up[K] - vs.values[K]) - sd) <= 1e-6 * Math.max(1, sd) &&
+          Math.abs((vb.up[K] - vs.values[K]) - (vs.values[K] - vb.lo[K])) < 1e-9 && sd > 0 && Math.abs(vb.up[0] - vs.values[0]) < 1e-9;
+      }
+      ok('avwap_bands', vok, vdet);
+      $('#clearBtn').click();
+
+      // 3) 回放自动播放：按「播放」一根一根往后走；点「前一根」就停；播到最新一根自己停
+      const i0 = S.asof - 5;
+      await replayTo(S.bars.d[i0]);
+      $('#rpSpeed').value = '250'; $('#rpSpeed').dispatchEvent(new Event('change', { bubbles: true }));
+      $('#rpPlay').click();
+      const moved = await until(() => S.asof >= i0 + 2, 5000);
+      ok('replay_autoplay', moved && fe.playing() && /暂停/.test($('#rpPlay').textContent), [S.asof, i0]);
+      $('#rpPrev').click();
+      const a1 = S.asof; await sleep(700);
+      ok('replay_autoplay_stops', !fe.playing() && S.asof === a1 && /播放/.test($('#rpPlay').textContent), [a1, S.asof]);
+      const last = S.bars.d.length - 1;
+      await replayTo(S.bars.d[last - 2]);
+      $('#rpPlay').click();
+      const ended = await until(() => !fe.playing(), 6000);
+      ok('replay_autoplay_ends', ended && S.asof === last && $('#rpPlay').disabled, [S.asof, last]);
+      await replayTo(d0);
+
+      // 4) 技术指标库：搜索认中文、英文代号、全拼、首字母；点一行就加上；收藏；官方预设；我的组合
+      const ind0 = Object.assign({}, S.ind), CH = ['ma', 'ema', 'vol', 'macd', 'boll', 'rsi', 'kdj', 'atr'];
+      $('#indBtn').click();
+      ok('indlib_opens', !$('#indLib').hidden && all('#ilSide [data-sec]').length >= 8 && /全部指标/.test($('#ilSide').textContent) && /官方预设/.test($('#ilSide').textContent));
+      const vis = () => all('#ilList .il-row').filter(r => !r.hidden).map(r => r.dataset.row);
+      const find = s => { const q = $('#ilQ'); q.value = s; q.dispatchEvent(new Event('input', { bubbles: true })); return vis().join(); };
+      const sr = { zh: find('布林'), en: find('boll'), py: find('bulin'), ab: find('bld'), ma: find('ydjx'), atr: find('zsbf'), none: find('xyzq') };
+      ok('indlib_search', sr.zh === 'boll' && sr.en === 'boll' && sr.py === 'boll' && sr.ab === 'boll' && sr.ma === 'ma' && sr.atr === 'atr' && sr.none === '' && /没有找到/.test($('#ilExtra').textContent), sr);
+      find('');
+      const n0s = fe.series(), ix = S.asof;
+      $('#ilList [data-ind=ma]').click(); await frame();
+      const c5 = S.bars.c.slice(ix - 4, ix + 1).reduce((a, b) => a + b, 0) / 5;
+      ok('indlib_adds_ma', S.ind.ma && fe.series() === n0s + 4 && Math.abs(fe.mav().ma[0][ix] - c5) < 1e-9 && /MA/.test($('#legend').textContent) &&
+        $('#ilList .il-row[data-row=ma]').classList.contains('on') && Number($('#indCount').textContent) === CH.filter(k => S.ind[k]).length, [fe.series(), n0s]);
+      $('#ilList [data-ind=ema]').click(); await frame();
+      const em = n => { const c = S.bars.c, k = 2 / (n + 1); let e = c.slice(0, n).reduce((a, b) => a + b, 0) / n; for (let j = n; j <= ix; j++) e = c[j] * k + e * (1 - k); return e; };
+      ok('indlib_adds_ema', S.ind.ema && Math.abs(fe.mav().ema[0][ix] - em(12)) < 1e-6 * em(12) && Math.abs(fe.mav().ema[1][ix] - em(26)) < 1e-6 * em(26));
+      $('#ilList [data-ifav=rsi]').click(); $('#ilSide [data-sec=fav]').click();
+      ok('indlib_favorite', JSON.parse(localStorage.getItem('fe.ind.fav') || '[]').indexOf('rsi') >= 0 && vis().join() === 'rsi');
+      $('#ilSide [data-sec=preset]').click();
+      const pb = all('#ilExtra [data-act=preset]'); pb[3].click(); await frame();
+      ok('indlib_preset', pb.length === 4 && S.ind.ma && S.ind.ema && S.ind.vol && S.ind.macd && !S.ind.rsi && !S.ind.kdj && !S.ind.boll && !S.ind.atr);
+      $('#ilSide [data-sec=combo]').click(); $('#ilExtra [data-act=save]').click();
+      const cb = JSON.parse(localStorage.getItem('fe.ind.combos') || '[]');
+      $('#ilSide [data-sec=preset]').click(); all('#ilExtra [data-act=preset]')[0].click(); await frame();
+      const plain = !S.ind.ma && !S.ind.ema && S.ind.vol && S.ind.macd;
+      $('#ilSide [data-sec=combo]').click(); $('#ilExtra [data-act=use]').click(); await frame();
+      ok('indlib_combo', cb.length === 1 && cb[0].keys.join() === 'ma,ema,vol,macd' && plain && S.ind.ma && S.ind.ema, cb);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      ok('indlib_esc_closes', $('#indLib').hidden);
+      CH.forEach(k => { if (!!S.ind[k] !== !!ind0[k]) $('#ilList [data-ind=' + k + ']').click(); });      // 还原成原来那几个指标
+      await frame();
+    }
+
     // 指标开关
     const panes0 = ch.panes().length; const macd = document.querySelector('[data-ind=macd]'); macd.click(); await frame();
     const panes1 = ch.panes().length; macd.click(); await frame();
@@ -294,7 +405,8 @@
       ok('pf_positions_rows', rows.length === pf.positions.length && document.querySelectorAll('#pfOthers tbody tr').length === pf.other_accounts.length, rows.length);
       const noChart = pf.positions.filter(p => !p.check_ticker);
       ok('pf_four_evidence_column', pf.positions.filter(p => p.check_ticker === 'SPCX').length === 5 && pf.positions.filter(p => p.check_ticker === 'SPCX').every(p => scoreOf(p.symbol) === want) &&
-        noChart.length > 0 && noChart.every(p => scoreOf(p.symbol) === '—'), out.info.pf_scores);
+        noChart.every(p => scoreOf(p.symbol) === '—') &&                                       // 没有 K 线的显示 —（2026-11-18 起 JOBY 有了 K 线，可能一个都没有）
+        pf.positions.filter(p => p.check_ticker && p.check_ticker !== 'SPCX').every(p => (scoreOf(p.symbol) || '').indexOf(p.check_ticker + ' ') === 0), out.info.pf_scores);
       ok('pf_estimate_tags', document.querySelectorAll('#pfPositions .est').length === pf.positions.length && !!document.querySelector('.pf-lv[data-k=SPCX_bp_zero_est] .est') && !document.querySelector('.pf-lv[data-k=SPCX_minus10pct_buffer] .est'));
       ok('pf_checklist_hits', document.querySelectorAll('#pfChecklist li').length === pf.inversion_checklist.length && document.querySelectorAll('#pfChecklist li.hit').length === pf.inversion_checklist.filter(x => x.flag).length);
       ok('pf_updated_and_asof', /持仓更新于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test($('#pfUpdated').textContent) && /台北/.test($('#pfAsof').textContent), $('#pfUpdated').textContent);
@@ -463,31 +575,43 @@
       $('#modalClose').click();
       await pick('SPCX');
     }
-    // AI 对话：一键解释的入口已经拿掉（zaki 2026-11-17：有 AI 对答就够了）；旧对话里的解释卡片还能照常显示
+    // AI 对话（2026-11-18 重做）：页面上只有问答。旧的「一键解释」卡片不显示、不进历史；顶上一行写它在看哪张图；
+    // 开场三个问题跟着这张图走；不逐条列 token；「联网查」只管下一问
     {
-      const CF = window.FEChat, QF = window.FEQuant;
+      const CF = window.FEChat, seeded = new URLSearchParams(location.search).get('chatseed') === '1';
       ok('chat_closed_by_default', $('#learn').hidden && !CF.isOpen());
-      ok('explain_entry_removed', !$('#learnBtn') && !$('#chatExplain'));
+      ok('explain_entry_removed', !$('#learnBtn') && !$('#chatExplain') && typeof CF.explain === 'undefined');
       $('#chatBtn').click(); await until(() => !$('#learn').hidden, 4000);
-      ok('chat_button_opens_chat', CF.isOpen() && !!$('#learn .chat-empty'));
-      CF.explain(); await until(() => CF.conv() && CF.conv().messages.length === 1 && document.querySelector('#learn .lcard'), 8000);
-      const cv = CF.conv(), lp = cv.messages[0].learn, cards = [...document.querySelectorAll('#learn .lcard')];
-      ok('old_explain_cards_still_render', !$('#learn').hidden && cv.messages[0].kind === 'explain' && cards.length === lp.cards.length && cards.length >= 12, cards.length);
+      await until(() => /·/.test($('#chatCtx').textContent) && $('#chatCtx').textContent.indexOf(S.bars.d[S.asof].slice(5)) >= 0, 4000);
+      ok('chat_button_opens_chat', CF.isOpen() && !!$('#learn .chat-empty') && $('#learn .chat-empty').textContent.length < 30, $('#learn .chat-empty') && $('#learn .chat-empty').textContent);
+      ok('chat_context_line', $('#chatCtx').textContent.indexOf(S.ticker) >= 0 && $('#chatCtx').textContent.indexOf(S.bars.d[S.asof].slice(5)) >= 0, $('#chatCtx').textContent);
+      const qs = [...document.querySelectorAll('#chatQuick button')].map(b => b.textContent);
+      ok('chat_starters_follow_chart', !$('#chatQuick').hidden && qs.length === 3 && qs.join('|') === CF.starters().join('|'), qs);
+      ok('chat_no_cards_no_token_lines', !document.querySelector('#learn .lcard') && !$('#chatUsage') && !/token|走缓存/.test($('#learn').textContent), $('#learn').textContent.slice(0, 120));
+      ok('chat_web_is_one_shot', !$('#chatWeb').checked && /下一问/.test($('#learn .chat-web').textContent));
       ok('chat_chart_still_there', candle.data().length === S.bars.d.length && $('#chart').getBoundingClientRect().width > 300, $('#chart').getBoundingClientRect().width);
-      ok('explain_no_advice', !/建议买|建议卖|可以买入|赶紧/.test($('#learn').textContent));
       ok('chat_input_matches_key', $('#chatInput').disabled === !S.meta.ai.enabled && (S.meta.ai.enabled || /没有设置 API 密钥/.test($('#chatInput').placeholder)), $('#chatInput').placeholder);
       // Markdown 只建节点：加粗、列表、表格、链接；脚本标签当普通文字
       const fr = document.createElement('div'); fr.appendChild(CF.md('**结论**：先等\n\n- 第一条\n- 第二条\n\n| 项 | 值 |\n|---|---|\n| 止损 | 144.34 |\n\n<script>window.__x=1</script> [出处](https://example.com/a)'));
       ok('chat_markdown_is_safe', !!fr.querySelector('strong') && fr.querySelectorAll('li').length === 2 && fr.querySelectorAll('td').length === 2 && !fr.querySelector('script') && window.__x === undefined &&
         fr.querySelector('a').getAttribute('href') === 'https://example.com/a' && fr.querySelector('a').rel === 'noopener noreferrer', fr.innerHTML.slice(0, 200));
-      // 历史和新对话
-      $('#chatHistBtn').click(); await until(() => document.querySelector('#learn .chat-item'), 6000);
-      ok('chat_history_lists_saved', document.querySelectorAll('#learn .chat-item').length >= 1 && /一键解释/.test($('#learn .chat-item b').textContent) && $('#chatForm').hidden);
+      // 历史和新对话。测试那边先放了两段存档（chatseed=1）：一段只有旧卡片，一段是真的问答（中途换过一次图）
+      $('#chatHistBtn').click(); await until(() => document.querySelector('#learn .chat-item') || document.querySelector('#learn .chat-empty'), 6000);
+      if (seeded) {
+        const items = [...document.querySelectorAll('#learn .chat-item b')].map(b => b.textContent);
+        ok('chat_history_hides_card_only', items.length === 1 && items[0] === '还缺哪一项？' && $('#chatForm').hidden, items);
+        ok('chat_history_shows_asks_and_usage', /2 问/.test($('#learn .chat-item small').textContent) && /万 token|k token/.test($('#learn .chat-item small').textContent), $('#learn .chat-item small').textContent);
+        document.querySelector('#learn .chat-item .open').click();
+        await until(() => CF.conv() && document.querySelectorAll('#learn .cmsg').length === 4, 6000);
+        const body = $('#chatBody').textContent;
+        ok('chat_reopens_only_questions_and_answers', document.querySelectorAll('#learn .cmsg').length === 4 && !document.querySelector('#learn .lcard') && !/一键解释|名词小词典/.test(body), body.slice(0, 200));
+        ok('chat_no_per_message_notes', !/已附上|token|走缓存/.test(body), body.slice(0, 200));
+        ok('chat_divider_only_when_chart_changed', document.querySelectorAll('#learn .cx-div').length === 1 && /NVDA/.test($('#learn .cx-div').textContent), $('#learn .cx-div') && $('#learn .cx-div').textContent);
+        ok('chat_sources_listed', !!$('#learn .cx-src a') && /出处/.test($('#learn .cx-src').textContent));
+        ok('chat_starters_hidden_after_first_question', $('#chatQuick').hidden);
+      } else $('#chatHistBtn').click();
       $('#chatNewBtn').click(); await frame();
-      ok('chat_new_is_empty', !CF.conv() && !!$('#learn .chat-empty') && !$('#chatForm').hidden);
-      $('#chatHistBtn').click(); await until(() => document.querySelector('#learn .chat-item .open'), 6000);
-      document.querySelector('#learn .chat-item .open').click(); await until(() => CF.conv() && CF.conv().id === cv.id && document.querySelectorAll('#learn .lcard').length >= 12, 6000);
-      ok('chat_reopens_with_memory', CF.conv().messages.length === 1 && document.querySelectorAll('#learn .lcard').length >= 12);
+      ok('chat_new_is_empty', !CF.conv() && !!$('#learn .chat-empty') && !$('#chatForm').hidden && !$('#chatQuick').hidden);
       $('#chatClose').click();
       ok('chat_closes', $('#learn').hidden && !CF.isOpen());
       // 切换模型不清空 AI 解读：另一个模型下分析过的那一份留在原处

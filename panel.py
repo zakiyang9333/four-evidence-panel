@@ -16,7 +16,7 @@ import numpy as np
 import engine as E
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-TICKERS = ('SPCX', 'NVDA', 'QQQ')
+ALL_TICKERS = ('SPCX', 'NVDA', 'QQQ', 'JOBY')       # JOBY 2026-11-18 加入（zaki）；它只有 Yahoo 一个来源，每根都标“单一来源”
 P, F = E.VIDEO, E.FIXED
 FAN_LEVELS = (0.382, 0.5, 0.618)
 NAMES = ('地量见底', '底背离出现', '跌速放缓', '站回成本线')
@@ -31,6 +31,10 @@ def data_dir():
 
 def csv_path(t):
     return os.path.join(data_dir(), f'{t}.csv')
+
+
+# 数据目录里有日线文件的才算（测试用的临时目录可能只放了其中几只）。启动时定一次
+TICKERS = tuple(t for t in ALL_TICKERS if os.path.exists(csv_path(t)))
 
 
 def fnum(x, nd=6):

@@ -36,7 +36,7 @@ EST = dict(stop=0.005, look=120, kc=1.5, gap_n=250, gap_q=95)
 EST_NOTE = dict(stop='止损挂在前一个摆动点外侧多远', look='带宽排位和最近多少根比', kc='收口：布林带缩进中轨 ± 几个 ATR 的肯特纳通道', gap_n='统计跳空的根数', gap_q='跳空取第几百分位')
 REFS = ('收口的写法：xgboosted/pandas-ta-classic 的 squeeze（布林带(20,2) 缩进肯特纳通道(20, 1.5×ATR)）', 'kernc/backtesting.py：跳空跳过止损时按开盘价成交，比止损价更差',
         '布林带(20,2)、ATR(14)：indicators.py')
-NOTES = ('观察用：假设你手里有仓位、止损挂在前一个摆动点外面，看过夜会不会睡不着。不给价位。', '没有回测过。照录屏的四条要点重写。')
+NOTES = ('观察用：假设你手里有仓位、止损挂在前一个摆动点外面，看过夜会不会睡不着。不给价位。', '没有回测过。照录屏的四条要点重写，不是原作者的代码。')
 
 LEARN = dict(
     long=dict(idea_title='“睡得着”在看什么？',

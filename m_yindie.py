@@ -28,7 +28,7 @@ VIDEO_NOTE = {}
 EST = dict(look=160, touch_atr=0.5, reg_n=40)
 EST_NOTE = dict(look='找高点和均价线起点的回看根数', touch_atr='碰到均价线附近：几个 ATR 以内', reg_n='回归趋势看最近多少根')
 REFS = ('锚定 VWAP（Brian Shannon），录屏卡片：站不回均价，别谈回本', '回归趋势：一段收盘价的最小二乘直线（indicators.linreg_channel）')
-NOTES = ('观察用：只告诉你阴跌的样子还在不在，不给价位。', '没有回测过。照录屏面板上的说明和三样证据重写。')
+NOTES = ('观察用：只告诉你阴跌的样子还在不在，不给价位。', '没有回测过。照录屏面板上的说明和三样证据重写，不是原作者的代码。')
 
 LEARN = dict(
     short=dict(idea_title='“阴跌雷达”在看什么？',

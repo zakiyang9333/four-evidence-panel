@@ -93,7 +93,7 @@ def compute(P, i, n_bars=20):
     else:
         parts.append(dict(name='波动', v=0, why=f'不足 {EST["atr_n"]} 根 K 线'))
 
-    # 结构：最近两组已确认的摆动点。高点、低点都抬高 +100；都降低 −100；其余 0
+    # 结构：最近两组已确认的摆动点。高点、低点都抬高 +EST['struct']（现在是 +40）；都降低 −40；其余 0
     conf, _ = hs.swings(P, i)
     hi = [x['price'] for x in conf if x['kind'] == 'high'][-2:]
     lo = [x['price'] for x in conf if x['kind'] == 'low'][-2:]
