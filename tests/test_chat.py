@@ -64,6 +64,16 @@ class Store(unittest.TestCase):
         for must in ('8 岁', '不说“买”“卖”', '改不改由你定', '直接说不知道', '规则是写死的', '没有被证明管用', '第一句就是结论', '最多三条理由', '不在结尾重复'):
             self.assertIn(must, chat.SYSTEM)
         self.assertIn('核心仓', chat.system())                                                          # 核心仓的规矩在他自己的规则里（起步模板就有）
+        for must in ('作废线', '没齐，不给', '偏多 / 偏空 / 看不清', '不用“多半”“可能”“或许”', 'asked'):          # 价位问题先给表；看法要表态（2026-11-18）
+            self.assertIn(must, chat.SYSTEM)
+
+    def test_question_names_another_model_or_ticker(self):
+        import server
+        self.assertEqual(server.asked_pairs('英伟达不接飞刀的价位分别在哪里', 'SPCX', 'four'), [('NVDA', 'feidao', 'long')])
+        self.assertEqual(server.asked_pairs('不接飞刀做空呢', 'NVDA', 'four'), [('NVDA', 'feidao', 'short')])
+        self.assertEqual(server.asked_pairs('后手和破位反抽在 QQQ 上怎么说', 'NVDA', 'four'), [('QQQ', 'houshou', 'long'), ('QQQ', 'breakout', 'short')])
+        self.assertEqual(server.asked_pairs('止损在哪？', 'NVDA', 'four'), [])                                # 没点名：只看屏幕上那一份
+        self.assertEqual(server.asked_pairs('四证怎么说', 'NVDA', 'four'), [])                                # 点名的就是屏幕上的：不重复带
         self.assertNotIn('一键解释', chat.SYSTEM)
 
 
@@ -136,6 +146,13 @@ class Api(unittest.TestCase):
         self.assertGreater(rows[0]['tokens'], 0)                                                          # 用量写在历史列表里，不逐条列
         self.assertTrue(json.loads(http(self.s.port, '/api/chat/delete', {'id': cid})[1])['removed'])
         self.assertFalse(json.loads(http(self.s.port, f'/api/chat/get?id={cid}')[1])['ok'])
+
+    def test_named_model_comes_with_its_current_result(self):
+        self.send(ticker='SPCX', asof='', model='four', text='英伟达不接飞刀的价位分别在哪里')
+        ctx = json.loads(FakeClaude.seen[-1][2]['messages'][-1]['content'][0]['text'][len('【图表数据】'):])
+        self.assertEqual(ctx['ticker'], 'SPCX')                                                          # 屏幕上的还是 SPCX
+        self.assertEqual([(a['ticker'], a['model'], a['side']) for a in ctx['asked']], [('NVDA', '不接飞刀 v1.3', '做多')])     # 点名的 NVDA 不接飞刀现算一份
+        self.assertIn('rule_signal', ctx['asked'][0]); self.assertNotIn('positions', json.dumps(ctx['asked'], ensure_ascii=False))
 
     def test_old_cards_are_kept_but_never_shown_listed_or_sent(self):
         """以前「一键解释」放进对话的卡片：文件里留着，页面拿不到、历史里不列、提问时不发给 AI；第一句提问就是标题。"""

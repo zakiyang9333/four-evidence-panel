@@ -104,5 +104,8 @@ def _core(P, j):
         out.update(verdict='等' if not far else '不追', verdict_text=f'清单 {n}/3，等' if not far else '已经走到第一目标附近，不追', state='wait' if not far else 'avoid',
                    text=(f'{W["pat"]}已经成形，清单 {n}/3。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。') if not far else f'价格已经走到第一目标 {R(P, t1)} 附近，这一段不追。')
         out['next_needs'] = ([f'右肩不能越过 {R(P, half)}（0.5 线）'] if not k2 else []) + ([f'MA{EST["ma"]} 要重新{W["trend"]}'] if not k3 else [])
+        if k2 and not far:      # 预案（只给 AI 对话）：右肩已经走完，过了 0.5 就不会再条件齐，不给
+            a = pt.atr(P, j)
+            out['pre'] = qm.preplan(P, cj - EST['zone_atr'] * a, cj + EST['zone_atr'] * a, dn(L3, EST['stop']), t1, neck(j) + EST['t2_mult'] * depth)
     out['next_needs'] = out['next_needs'] + [f'收盘越过右肩 {R(P, L3)}：这个{W["pat"]}作废']
     return qm.finish(out)

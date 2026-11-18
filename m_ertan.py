@@ -165,8 +165,8 @@ def _core(P, j):
         need.append(f'盘中{W["pierce"]}布林{W["band"]}（现在在 {R(P, band)}），收盘再回到它{W["over"]}')
     need.append(f'收盘{W["brk"]} {R(P, Ap)}（{W["prior"]}）：{W["probe"]}不成立')
     out['next_needs'] = need
+    atr = float(P['atr'][j]) if np.isfinite(P['atr'][j]) else abs(Cp) * 0.03
     if k1 and k2 and k3:
-        atr = float(P['atr'][j]) if np.isfinite(P['atr'][j]) else abs(Cp) * 0.03
         pl = qm.plan(P, Cp, Cp + EST['zone_atr'] * atr, dn(Ap, EST['stop']), Bp, Ap + EST['t2_mult'] * (Bp - Ap), '前低起量 2 倍反弹幅度【估算】' if qm.long(P) else '前高起量 2 倍回落幅度【估算】')
         out.update(pl)
         out.update(verdict='条件齐', verdict_text=qm.pick(P, '二探条件齐了（未回测）', '二次冲高条件齐了（未回测）'), state='ready', zone_from=d[Ci],
@@ -176,6 +176,11 @@ def _core(P, j):
         n = sum(1 for x in checks if x['ok'])
         out.update(verdict='等', verdict_text=f'{W["probe"]}中，清单 {n}/3', state='wait',
                    text=f'正在第二次{W["fall"]}，清单 {n}/3。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。')
+        # 预案（只给 AI 对话）：三项都还可能成立。这一下还不够深时，C 点按“刚好够深”的那个价算（入场区从 C 点起）
+        Ch = min(Cp, Ap + EST['deep'] * (Bp - Ap))
+        out['pre'] = qm.preplan(P, Ch, Ch + EST['zone_atr'] * atr, dn(Ap, EST['stop']), Bp, Ap + EST['t2_mult'] * (Bp - Ap))
+        if out['pre'] and Ch != Cp:
+            out['pre']['basis'] = f'这一下还不够{"深" if qm.long(P) else "高"}，C 点按刚好够{"深" if qm.long(P) else "高"}的 {R(P, Ch)} 算'
     return qm.finish(out)
 
 

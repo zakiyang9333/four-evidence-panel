@@ -380,6 +380,39 @@ def breakout_card(r, pos, side='short', hz=20, tf='D'):
 
 FOUR_T2 = 0.5          # 四证的第二目标【估算】：这一轮跌幅的一半（和录屏里第二目标贴着 0.5 回撤刻度的位置对得上）
 
+PRE_NOTE = '预案：假如还差的那几项就在今天收盘成立，价位大约在这里。条件齐了才算数，现在不是信号；哪天齐了，按那天的数重算，价位会挪。'
+
+
+def preplan(state, pre, core, basis=''):
+    """清单没齐时的「预案价位」：和这个模型条件齐时同一套公式，假设还差的那几项今天收盘就成立。
+    只交给 AI 对话（不进信号卡、不画线、不进 AI 解读的指纹）。条件齐了、观察用的模型、模型文件判断以后也不会齐的时候，都是 None。
+    核心仓（做多）没有价格止损，这里也不给止损和盈亏比。"""
+    if not pre or state not in ('wait', 'avoid') or not pre.get('zone'):
+        return None
+    out = dict(zone=pre['zone'], mid=pre.get('mid'), stop=None if core else pre.get('stop'), t1=pre.get('t1'), t2=pre.get('t2'), rr=None if core else pre.get('rr'), note=PRE_NOTE)
+    if core:
+        out['stop_note'] = '核心仓没有价格止损，预案也不给止损和盈亏比'
+    basis = basis or pre.get('basis') or ''
+    if basis:
+        out['basis'] = basis
+    return out
+
+
+def four_pre(st):
+    """四证的预案：已经触发（跌够了）但四项没齐时，引擎照样算出的成本线、止损、前高，按条件齐时卡片的写法摆成一份预案。
+    四项的判定和这几个价位全是引擎的（engine.py / panel.state_at），这里不另判：入场区 = 成本线到 +2%（narrate.card 的写法）。
+    盈亏比是同一道算术（panel.state_at 里那一行），只是入场价换成入场区中间，护栏也照搬：止损要在入场价下面 0.5% 以外，目标要在入场价上面 2% 以外。"""
+    if not st['armed'] or st['all4']:
+        return None
+    aw, sg = st['levels'].get('avwap'), st['signal']
+    stop, tgt = sg.get('stop'), sg.get('target')
+    if not aw or stop is None or tgt is None or not sg.get('target_usable'):
+        return None
+    mid = aw * 1.01
+    if not (mid > stop * 1.005 and tgt > mid * 1.02):
+        return None
+    return dict(zone=[hs.px(aw), hs.px(aw * 1.02)], mid=hs.px(mid), stop=hs.px(stop), t1=hs.px(tgt), t2=None, rr=hs.r2((tgt - mid) / (mid - stop)))
+
 
 def generic_signal(M, B, P, i, side, hz, tf, pos, core):
     """One model module built on qmodel.py → the same signal / card / overlay / history the hand-written adapters give."""
@@ -396,6 +429,7 @@ def generic_signal(M, B, P, i, side, hz, tf, pos, core):
     for k in getattr(mod, 'EXTRA', ()):          # 模型自己的几样事实（交给 AI 和模板用），例如前低、颈线、量山的位置
         if r.get(k) is not None:
             sig[k] = r[k]
+    sig['pre'] = r.get('pre')                     # 预案价位：result() 取走，只交给 AI 对话
     watch = M.get('kind') == 'watch'
     cells = [] if watch else (r.get('cells') or _cells(r['close'], r['zone'], r['mid'], None if core else r['stop'], r['t1'], r['rr'], r['t2'], sig['t2_note'], core=core and r['zone'] is not None))
     card = dict(model=mod.NAME + (f"（{mod.SIDE_NAME[side]}）" if getattr(mod, 'SIDE_NAME', None) and mod.SIDE_NAME.get(side) else ''), verdict=sig['verdict_text'], code=r['verdict'],
@@ -534,6 +568,7 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
         t1 = time.perf_counter()
         score = chart_score.compute(PL, i, hz)
         overlay, hist = None, dict(n=0, rows=[], note='', hold=hz)
+        pre, basis = None, ''           # 预案价位（只给 AI 对话）
         if not side_ok or not tf_ok:
             why = M.get('no_short', '这个模型没有做空一侧的规则。') if not side_ok else M.get('no_week', '这个模型只按日线判定。')
             alt = [m for m in MODELS if side in m['sides'] and tf in m['tfs']]
@@ -558,6 +593,10 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
                        state=HS_STATE.get(r['verdict'], 'na'), phase_text=r['phase'] if side == 'long' else HS_PHASE_SHORT.get(r['phase'], r['phase']),
                        params=r['params'], est_note=hs.EST_NOTE)
             card = houshou_card(r, pos, side, hz, tf)
+            pre = r.get('pre')
+            if pre and pre.get('d_point') is not None:
+                basis = (f'D 点按 {fmt_p(pre["d_point"])} 算' + ('（就是现在的 D 点）' if pre.get('d_now') else '（D 点还没走到位，按刚好走到位的价算）') +
+                         '；D 点再走远一点，止损和第二目标会跟着挪。')
             if r['anchor']:
                 overlay = dict(kind='houshou', side=side, anchor=r['anchor'], avwap=hs.avwap_series(P, r['anchor_index'], i), pushes=r['pushes'], abcd=r['abcd'],
                                zone=r['zone'], stop=sig['stop'], target=r['t1'], target2=r['t2'], base=r['base'])
@@ -572,6 +611,9 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
                        t2_note=r['t2_note'] if r['zone'] else '条件没齐，不给目标', state=BO_STATE.get(r['verdict'], 'na'), phase_text=r['phase'], anchor=None,
                        params=r['params'], est_note=bo.EST_NOTE)
             card = breakout_card(r, pos, side, hz, tf)
+            pre = r.get('pre')
+            if pre and not r.get('pull'):
+                basis = '还没' + bo.WORDS[side]['back'] + '：回来的极值按刚好到位的价算。'
             if r['level']:
                 overlay = dict(kind='breakout', side=side, level=r['level'], brk=r['brk'], extreme=r['extreme'], pull=r['pull'], box=r['box'],
                                zone=r['zone'], stop=sig['stop'], target=r['t1'], target2=r['t2'])
@@ -579,6 +621,7 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
         elif M.get('mod'):
             P = PL if side == 'long' else prepared(t, 'short', tf)[1]
             sig, card, overlay, hist, model_legend = generic_signal(M, B, P, i, side, hz, tf, pos, core)
+            pre = sig.pop('pre', None)
             name, version = M['name'], M['version']
         else:
             st['card'] = __import__('narrate').card_from_state(st, panel.backtest_summary())
@@ -599,6 +642,7 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
                         outcomes=dict(target=sum(1 for x in why if x == 'target'), stop=sum(1 for x in why if x.startswith('stop')),
                                       none=sum(1 for x in why if x != 'target' and not x.startswith('stop'))))
             card, name, version = four_card(st, hz, pos), '四证·抄底 v1.0', 'four-1.0'
+            pre = four_pre(st)
             lines += [x for x in structure.four_lines(PL, st) if ready or x['id'] != 'four_stop']     # 没齐：扇线、成本线照画，止损线不当价位给出去
             # 四证自己的止损、成本线、第一目标由「自动画」那一层画；这里只补第二目标这一条参考线
             if sig['t2'] is not None:
@@ -627,7 +671,7 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
                     horizon=dict(n=hz, label=HORIZONS[hz] if watch else horizon_label(hz, tf), options=[dict(n=n, label=HORIZONS[n] if watch else horizon_label(n, tf)) for n in HORIZONS]),
                     variant=variant(model, side, hz, tf), steps=steps, score=score, signal=sig, card=card, lines=lines,
                     overlay=overlay, history=hist, legend=leg, position=pos, position_note=position_note(pos, side, sig['state'], sig, core),
-                    explain=EXPLAIN, banner=BANNER,
+                    explain=EXPLAIN, banner=BANNER, preplan=preplan(sig['state'], pre, core, basis),
                     direction=dict(long='long' in M['sides'], short='short' in M['sides'], short_note='' if 'short' in M['sides'] else M.get('no_short', '')),
                     timeframe='日线' if tf == 'D' else '周线')
 

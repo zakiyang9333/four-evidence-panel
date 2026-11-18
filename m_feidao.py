@@ -104,16 +104,21 @@ def _core(P, j):
               qm.legend_item('boll', f'浅蓝色的线是布林{W["band"]}。刺破它、收盘又回来，是有人{"接" if Lg else "压"}了。')]
     out.update(phase='第三下', phase_text='第三下', list=KEY, checks=checks, shapes=shapes, legend=legend, _ev=d2i, _from=d3i,
                drives=dict(d1=R(P, D1), r1=R(P, R1), d2=R(P, D2), r2=R(P, R2), d3=R(P, D3)), story=f'{d[d1i][5:]}、{d[d2i][5:]}、{d[d3i][5:]} 连{W["down"]}三下')
+    # 预案（只给 AI 对话）：入场区跟着条件齐那天的收盘走，所以只在第三下已经落到位（第一项成立）时给，按今天收盘算。
+    # 第三下已经走完、RSI 没背离，这一组三驱不会再条件齐，也不给。
+    pre = qm.preplan(P, float(c[j]) - EST['zone_atr'] * a, float(c[j]), dn(D3, EST['stop']), R2, R1) if k1 and (k2 or td['d3_pending']) else None
     if float(rsi[j]) < VIDEO['rsi_floor']:
-        out.update(verdict='不抄', verdict_text=f'{W["rsi_bad"]}，不抄' if Lg else f'{W["rsi_bad"]}，不追空', state='avoid', text=f'RSI 现在 {rv(rsi[j]):.1f}，按规则这时候不碰。')
+        out.update(verdict='不抄', verdict_text=f'{W["rsi_bad"]}，不抄' if Lg else f'{W["rsi_bad"]}，不追空', state='avoid', text=f'RSI 现在 {rv(rsi[j]):.1f}，按规则这时候不碰。', pre=pre)
     elif hug:
-        out.update(verdict='不抄', verdict_text=f'贴着布林{W["band"]}、口子还在张，' + ('不抄' if Lg else '不追空'), state='avoid', text=f'收盘还贴着布林{W["band"]}，布林带的口子还在张开，按规则不碰。')
+        out.update(verdict='不抄', verdict_text=f'贴着布林{W["band"]}、口子还在张，' + ('不抄' if Lg else '不追空'), state='avoid', text=f'收盘还贴着布林{W["band"]}，布林带的口子还在张开，按规则不碰。',
+                   pre=pre)
     elif k1 and k2 and k3:
         out.update(qm.plan(P, float(c[j]) - EST['zone_atr'] * a, float(c[j]), dn(D3, EST['stop']), R2, R1, f'第一次{W["bounce"]}的{"高" if Lg else "低"}点'))
         out.update(verdict='条件齐', verdict_text='条件齐了（未回测）', state='ready', zone_from=d[d3i],
                    text=f'第三次探{"底" if Lg else "顶"}出现{"底" if Lg else "顶"}背离，收回布林{W["band"]}，三项条件满足。价格进入建仓区，{"跌破" if Lg else "涨破"}止损离场。这套规则没有回测过，这里只是把清单结果摆出来。')
     else:
         n = sum(1 for x in checks if x['ok'])
-        out.update(verdict='等', verdict_text=f'清单 {n}/3，等第三下', state='wait', text=f'已经{W["down"]}了三下，清单 {n}/3。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。')
+        out.update(verdict='等', verdict_text=f'清单 {n}/3，等第三下', state='wait', text=f'已经{W["down"]}了三下，清单 {n}/3。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。',
+                   pre=pre)
     out['next_needs'] = [f'第三下要落在 {z_a} ~ {z_b} 一带（前后放宽半个 ATR）', f'收盘{"跌破" if Lg else "涨破"} {R(P, D3)} 再创新{W["low"]}：跌出第四下，形态失效']
     return qm.finish(out)

@@ -115,5 +115,10 @@ def _core(P, j):
         stale = b is not None and j - b >= EST['fresh'] and float(c[j]) > neck(j)
         out.update(verdict='等', verdict_text=f'清单 {n}/3，等' if not stale else f'{brk_w}颈线已经过去几天了，不追', state='wait' if not stale else 'avoid',
                    text=f'{pat}在颈线附近，清单 {n}/3。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。三份建仓表里写着前两份的位置。')
+        # 预案（只给 AI 对话）：入场区是站上颈线那一根的高低点，那一根还没出现就给不出；那一根的量不够、或者已经过去太久，也不会再条件齐
+        if b is not None and k1 and k2 and not stale:
+            t1 = neck(b) + depth
+            hi = float(np.max(h[max(0, L1i - EST['look_high']):L1i + 1]))
+            out['pre'] = qm.preplan(P, float(l[b]), float(h[b]), neck(j) - EST['stop_atr'] * a, t1, hi if hi > t1 else neck(b) + EST['t2_mult'] * depth)
         out['next_needs'] = [f'放量（≥ 前 5 根均量的 {EST["vol"]} 倍）收盘{brk_w}颈线 {R(P, neck(j))}，才是第三份']
     return qm.finish(out)

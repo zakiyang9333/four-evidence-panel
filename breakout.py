@@ -117,7 +117,7 @@ def _core(P, j):
     R = lambda x: px(s * x)
     span = lambda a, b: (R(a), R(b)) if s == 1 else (R(b), R(a))
     out = dict(phase='无结构', verdict='不适用', list=None, checks=[], missing=[], next_needs=[], note='', level=None, brk=None, extreme=None, pull=None,
-               box=None, dist_pct=None, zone=None, mid=None, stop=None, t1=None, t2=None, t2_note='', rr=None, _b=None, _ready=False, _stop=None)
+               box=None, dist_pct=None, zone=None, mid=None, stop=None, t1=None, t2=None, t2_note='', rr=None, pre=None, _b=None, _ready=False, _stop=None)
     cj = float(c[j])
     levels = _clusters(P, j)
     f_brk, f_ret = _tol(P)
@@ -246,6 +246,15 @@ def _core(P, j):
         out.update(zone=list(span(z1, z2)), mid=R(mid), stop=R(stop), t1=R(far_p), t2=R(t2) if t2_ok else None,
                    t2_note='按这一跌再量一遍 1.0' if t2_ok else '再量一遍的位置没有超过第一目标，不设',
                    rr=r2((far_p - mid) / (mid - stop)) if mid > stop and far_p > mid else None, _stop=stop)
+    elif not k3ok and k1['ok']:
+        # 预案（只给 AI 对话，信号卡照旧不给价位）：和上面条件齐时同一套公式。还没回来的话，回来的极值按刚好“到位”的那条线算。
+        # 破位那根没放量的不给：录屏说那样的破位不算数，以后也不会条件齐。
+        ph = min(pl, up(lv, float(f_ret[j]))) if pl is not None else up(lv, float(f_ret[j]))
+        y1, y2 = lv, up(lv, EST['zone'])
+        ym, ys = (y1 + y2) / 2, dn(min(ph, lv), EST['stop'])
+        if far_p > y2 and not hs.plan_check(s, ym, ys, far_p):           # 第一目标要越过入场区，不然不算一份计划
+            yt2 = ph + VIDEO['t2_ext'] * (far_p - box_far)
+            out['pre'] = dict(zone=list(span(y1, y2)), mid=R(ym), stop=R(ys), t1=R(far_p), t2=R(yt2) if yt2 > far_p else None, rr=r2((far_p - ym) / (ym - ys)))
     memo[j] = out
     return out
 
@@ -260,7 +269,7 @@ def evaluate(P, j):
             if rq['_b'] == r['_b'] and rq['_ready']:
                 x = next((x for x in range(q + 1, j + 1) if P['c'][x] < rq['_stop']), None)
                 if x is not None:
-                    r.update(phase='已失效', verdict='已失效', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[], _ready=False,
+                    r.update(phase='已失效', verdict='已失效', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[], pre=None, _ready=False,
                              note=f'{P["d"][q]} 条件齐过一次，{P["d"][x]} 收盘越过了当时的止损 {px(P["s"] * rq["_stop"])}，这个结构作废。')
                 break
     return r

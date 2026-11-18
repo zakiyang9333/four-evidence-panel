@@ -114,7 +114,7 @@ def confirmed_at(P, bar):
 
 def blank(**kw):
     out = dict(phase='无结构', verdict='不适用', state='na', list=None, checks=[], missing=[], next_needs=[], note='', text='', zone=None, mid=None, stop=None, t1=None,
-               t2=None, t2_note='', rr=None, shapes=[], legend=[], zone_from=None, cells=None, _ev=None, _from=None, _stop=None)
+               t2=None, t2_note='', rr=None, shapes=[], legend=[], zone_from=None, cells=None, pre=None, _ev=None, _from=None, _stop=None)
     out.update(kw)
     return out
 
@@ -134,6 +134,14 @@ def plan(P, zlo, zhi, stop, t1, t2=None, t2_note='', t2_none=''):
                 t2_note=t2_note if ok2 else (t2_none or '第二目标的位置没有超过第一目标，不设'),
                 rr=r2((t1 - mid) / (mid - stop)) if t1 is not None and mid > stop and t1 > mid else None, _stop=stop,
                 _bad=hs.plan_check(P['s'], mid, stop, t1))      # 价位在显示的位数下分不开：settle() 会把这次“条件齐”收回
+
+
+def preplan(P, zlo, zhi, stop, t1, t2=None):
+    """预案价位：清单还没齐时，假如还差的那几项就在今天收盘成立，计划会落在哪。和 plan() 是同一套公式，只交给 AI 对话（信号卡照旧不给价位）。
+    价位在显示的位数下分不开、或者第一目标没有越过入场区，就不给。模型文件只在“还差的那几项以后还可能成立”的时候调用它；
+    还在走的那个点（比如二探的低点）要先挪到“刚好让那一项成立”的位置，再传进来。"""
+    p = plan(P, zlo, zhi, stop, t1, t2)
+    return None if p['_bad'] or p['rr'] is None or t1 <= zhi else {k: p[k] for k in ('zone', 'mid', 'stop', 't1', 't2', 'rr')}
 
 
 def finish(out):
@@ -210,7 +218,7 @@ def fine(r):
     note = f'清单都成立，但{r["_bad"]}。这一次不算条件齐，也不给价位和盈亏比。'
     r = dict(r)
     r.update(verdict=hs.TOO_FINE, verdict_text='价位太细，不给价位', state='na', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, cells=None,
-             zone_from=None, next_needs=[], note=note, text=note, _stop=None)
+             zone_from=None, next_needs=[], note=note, text=note, pre=None, _stop=None)
     return r
 
 
@@ -226,7 +234,7 @@ def settle(P, key, core, j):
         if rq.get('_ev') == ev and rq['state'] == 'ready' and rq.get('_stop') is not None:
             x = next((x for x in range(q + 1, j + 1) if P['c'][x] < rq['_stop']), None)
             if x is not None:
-                r.update(phase='已失效', verdict='已失效', state='dead', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[], zone_from=None,
+                r.update(phase='已失效', verdict='已失效', state='dead', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[], zone_from=None, pre=None,
                          note=f'{P["d"][q]} 条件齐过一次，{P["d"][x]} 收盘越过了当时的止损 {R(P, rq["_stop"])}，这个结构作废。')
                 r['text'] = r['note']
             break

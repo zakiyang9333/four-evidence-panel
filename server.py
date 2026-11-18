@@ -342,6 +342,31 @@ def ai_history(t, limit=120):
     return dict(ok=True, ticker=t, days=out[:limit])
 
 
+# 问题里点名的模型和标的：不用先在面板上切过去，就带上它们现在的结果（同一段代码现算）
+ASK_MODELS = {'four': ('四证', '四要素'), 'ertan': ('等二探', '二探'), 'feidao': ('不接飞刀', '飞刀'), 'houshou': ('后手',), 'sanjiao': ('不追半山腰', '半山腰'),
+              'sanfen': ('三份法',), 'breakout': ('破位反抽', '突破回踩'), 'bubao': ('不爆仓',), 'genzhuang': ('跟庄',), 'huitou': ('等回头',),
+              'yindie': ('阴跌雷达', '阴跌'), 'shui': ('睡得着',), 'huiben': ('回本三看', '回本')}
+ASK_TICKERS = {'SPCX': ('SPCX', 'SpaceX'), 'NVDA': ('NVDA', '英伟达', '辉达'), 'QQQ': ('QQQ', '纳指', '纳斯达克'), 'JOBY': ('JOBY', 'Joby')}
+MAX_ASKED = 4
+
+
+def asked_pairs(text, t, model):
+    """(ticker, model, side) the question names, besides what is on the screen (t, model). Side: 做空/做多 in the question, else the model's own default."""
+    text = str(text or '')
+    low = text.lower()
+    ms = [k for k, al in ASK_MODELS.items() if k in quant.MODEL and any(a.lower() in low for a in al)]
+    ts = [k for k, al in ASK_TICKERS.items() if k in panel.TICKERS and any(a.lower() in low for a in al)]
+    want = 'short' if re.search(r'做空|空单|下行', text) else 'long' if re.search(r'做多|多单|上行', text) else None
+    out = []
+    for tk in ts or [t]:
+        for mk in ms or [model]:
+            M = quant.MODEL[mk]
+            side = want if want in M['sides'] else M.get('default_side', 'long') if M.get('default_side', 'long') in M['sides'] else M['sides'][0]
+            if (tk, mk) != (t, model) and (tk, mk, side) not in out:
+                out.append((tk, mk, side))
+    return out[:MAX_ASKED]
+
+
 def chat_context(t, asof, src):
     """The chart data a chat message carries, and a key that changes when any of it does. src = the page's five inputs (or just a model key)."""
     a = prof(src if isinstance(src, dict) else dict(model=src))
@@ -355,11 +380,21 @@ def chat_context(t, asof, src):
         n = rows[0].get('narration') or {}
         reading = dict(created_at=rows[0].get('created_at'), headline=n.get('hook'), story=n.get('story'), conclusion=n.get('final'),
                        steps=[dict(title=s.get('q'), says=s.get('say'), tag=s.get('sticker')) for s in n.get('steps') or []], watch=n.get('watch'))
+    with_pre = lambda q, qf: dict(qf, preplan=q['preplan']) if q.get('preplan') else qf     # 预案价位只给对话，不进 AI 解读（也不进它的指纹）
     body = dict(ticker=t, asof=x['q']['asof'], is_latest=bool(x['q']['is_latest']), selected_model=x['q']['model_name'], engine=f,
-                bars=dict(columns=['date', 'open', 'high', 'low', 'close', 'volume'], rows=x['bars']), backtest=x['bt'], quant=x['qf'],
+                bars=dict(columns=['date', 'open', 'high', 'low', 'close', 'volume'], rows=x['bars']), backtest=x['bt'], quant=with_pre(x['q'], x['qf']),
                 notes=x['notes'], saved_ai_reading=reading)
     if x['pos']:
         body.update(x['pos'])           # 只有这只标的相关的仓位，和 AI 解读发的是同一份
+    asked = []
+    for tk, mk, side in asked_pairs(src.get('text') if isinstance(src, dict) else '', t, a['model']):
+        try:
+            q2 = quant.result(tk, mk, x['q']['asof'], side, quant.MODEL[mk].get('default_hz') or 20, a['tf'], 'flat')     # 不带仓位：只是模型的结果
+        except (KeyError, ValueError):
+            continue
+        asked.append(dict(ticker=tk, model=q2['model_name'], side=q2['side_name'], asof=q2['asof'], price=q2['price'], **with_pre(q2, quant.facts_for_ai(q2))))
+    if asked:
+        body['asked'] = asked       # 他这一问点名的模型 / 标的现在的结果：回答以它为准，不用对话前面旧的那份
     if x['q']['is_latest'] and a['posmode'] == 'auto':
         mx = portfolio.chat_extras(t)   # 他自己的线、估值参考、这只的挂单和点名它的检查项（只给对话，不进 AI 解读的指纹）
         if mx:

@@ -275,7 +275,7 @@ def _core(P, j, am):
     k = bisect.bisect_right(pat, j)                    # 到第 j 根为止已确认的摆动点个数
     win0 = max(0, j - EST['top_win'] + 1) if am is None else am
     out = dict(phase='无结构', verdict='不适用', list=None, checks=[], missing=[], next_needs=[], note='', anchor=None, avwap=None, sd=None,
-               dist_pct=None, pushes=[], abcd=None, zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, base=None, start_low=None, top=None,
+               dist_pct=None, pushes=[], abcd=None, zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, base=None, start_low=None, top=None, pre=None,
                _A=None, _Aat=None, _all3=False)
 
     # 这一轮的最高点：窗口里最高的已确认高点，或者还没确认、但已经更高的那个高点
@@ -471,6 +471,19 @@ def _core(P, j, am):
             t2 = float(l[Di]) + EST['t2_ext'] * (Ap - float(l[L0]))          # 第二目标【估算】：从 D 点再量 2 倍这一轮（起涨低点到第三冲高点）的幅度
             out.update(zone=list(span(z1, z2)), mid=R(av), stop=R(stop), t1=R(Ap), t2=R(t2), rr=r2((Ap - av) / (av - stop)))
             out['_stop'] = stop
+    elif Cm is not None:
+        # 预案（只给 AI 对话，信号卡照旧不给价位）：和上面条件齐时同一套公式，只是 D 点还没落到位，要先定一个 D 点。
+        # 三项要同一天成立，D 点得同时落在成本线区间里、落在两段等长的范围里，而且低于成本线（那天盘中要刺破它）。
+        # 现在的 D 点已经比这一带更深：D 点只会更深，按现在的成本线，这一组 ABCD 不会再条件齐，不给。还没落到：按刚落进来的那个价算。
+        ab = (Ap - pp[Bm]) / abs(Ap)
+        lo_, hi_ = max(zlo, dn(pp[Cm], ab * (1 + VIDEO['abcd_tol']))), min(zhi, dn(pp[Cm], ab * (1 - VIDEO['abcd_tol'])), av)
+        Dl = float(l[Di])
+        if lo_ <= hi_ and Dl >= lo_:
+            Dh = min(Dl, hi_)
+            stop = dn(Dh, VIDEO['stop'])
+            if Ap > up(av, EST['zone']) and av > stop and not plan_check(s, av, stop, Ap):      # 第一目标要越过入场区
+                out['pre'] = dict(zone=list(span(dn(av, EST['zone']), up(av, EST['zone']))), mid=R(av), stop=R(stop), t1=R(Ap),
+                                  t2=R(Dh + EST['t2_ext'] * (Ap - float(l[L0]))), rr=r2((Ap - av) / (av - stop)), d_point=R(Dh), d_now=Dh == Dl)
     memo[j] = out
     return out
 
@@ -488,7 +501,7 @@ def evaluate(P, j, am=None):
             if rq['_A'] == r['_A'] and rq['_all3']:
                 broke = next((x for x in range(q + 1, j + 1) if P['c'][x] < rq['_stop']), None)
                 if broke is not None:
-                    r.update(phase='已失效', verdict='已失效', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[],
+                    r.update(phase='已失效', verdict='已失效', zone=None, mid=None, stop=None, t1=None, t2=None, rr=None, next_needs=[], pre=None,
                              note=f'{P["d"][q]} 条件齐过一次，{P["d"][broke]} 收盘{P["W"]["pierce"]}了当时的止损 {px(P["s"] * rq["_stop"])}，这个结构作废。')
                 break
     return r

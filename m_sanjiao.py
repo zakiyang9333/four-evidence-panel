@@ -120,5 +120,11 @@ def _core(P, j):
         far = float(c[j]) > up_(j) + 2 * a and not k3
         out.update(verdict='等' if not far else '不追', verdict_text=(f'清单 {n}/3，等{back_w}' if not far else f'离{edge}太远，不追，等{back_w}'), state='wait' if not far else 'avoid',
                    text=f'已经收出三角，清单 {n}/3。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。录屏说：回踩不进去，再追。')
+        # 预案（只给 AI 对话）：突破那天的量已经定了，量不够就不会再条件齐，不给。还没回踩到位时，回踩的低点按刚好到位算，止损就落在边线外侧
+        if vr is not None and vr >= EST['vol']:
+            out['pre'] = qm.preplan(P, up_(j), up_(j) + EST['zone_atr'] * a, min(dn(float(l[ri]), EST['stop']), dn(up_(j), EST['stop'])) if k3 else dn(up_(j), EST['stop']),
+                                    up_(b) + H, up_(b) + EST['t2_mult'] * H)
+            if out['pre'] and not k3:
+                out['pre']['basis'] = f'还没{back_w}到位，{back_w}按刚好碰到{edge}算'
     out['next_needs'] = [f'{back_w}到{edge} {R(P, up_(j))} 附近不掉回去', f'收盘掉回{edge}里面（{R(P, up_(j) - EST["back_atr"] * a)} 外侧）：假突破，作废']
     return qm.finish(out)

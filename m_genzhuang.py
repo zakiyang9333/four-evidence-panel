@@ -139,5 +139,9 @@ def _short(P, j):
     else:
         n = sum(1 for x in checks if x['ok'])
         out.update(verdict='等', verdict_text=f'清单 {n}/3，等', state='wait', text='跌破颈线以后还在看。还缺：' + '、'.join(x['name'] for x in checks if not x['ok']) + '。')
+        if not back:            # 预案（只给 AI 对话）。收盘已经站回颈线上面，按下面那句“跌破是假的”，不给
+            a = pt.atr(P, j)
+            out['pre'] = qm.preplan(P, cj - EST['zone_atr'] * a, cj + EST['zone_atr'] * a, dn(L3, EST['stop']), far if far > cj + EST['zone_atr'] * a * 0 else neck(b) + 0.5 * depth,
+                                    neck(b) + depth)
     out['next_needs'] = [f'收盘回到右肩 {R(P, L3)} 上面：这个头肩顶作废', f'收盘站回颈线 {R(P, neck(j))} 上面：跌破是假的']
     return qm.finish(out)
