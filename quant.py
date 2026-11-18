@@ -27,6 +27,8 @@ import breakout as bo
 import chart_score
 import qmodel as qm
 import m_bubao, m_ertan, m_feidao, m_genzhuang, m_huiben, m_huitou, m_sanfen, m_sanjiao, m_shui, m_yindie   # noqa: E401
+import m_mabull, m_squeeze, m_supertrend, m_td9, m_turtle         # noqa: E401  开源经典（2026-11-18，GitHub 上找的五个）
+import m_darvas, m_double7, m_minervini, m_nr7, m_rsi2            # noqa: E401  开源经典第二批（2026-11-18，X / 抖音两份候选清单里选的五个）
 import houshou as hs
 import panel
 import portfolio
@@ -83,8 +85,41 @@ MODELS += (
     _gen(m_huiben, '观察', '录屏「回本三看」的五条要点（那一段没打开面板）',
          '熬过一个头肩底终于回本时，看三样：收没收上颈线、在不在成本线上、回踩量缩一半颈线守没守住。到前高或 1.618 放量长上影就卖，收盘跌回颈线下就走。',
          ['收上颈线', '在成本线上面', '回踩量缩一半、不破颈线']),
+    # 开源经典：不是录屏里的，是 GitHub 上开源的经典规则（2026-11-18 zaki 选的五个）。照原版或公开描述重写，原版没给的数标【估算】
+    _gen(m_turtle, '开源经典', 'GitHub 开源：vn.py 的海龟策略（vnpy/vnpy_ctastrategy，MIT）',
+         '收盘冲过前 20 根的最高价就跟上，止损在突破价下方 2 个 ATR，收盘跌破前 10 根的最低价离场。这里多两条：只看刚突破的 3 根以内，离突破价超过 1 个 ATR 不追。原版本来就做两个方向。',
+         ['收盘突破 20 日最高价', '离突破价不远', '没破离场线']),
+    _gen(m_td9, '开源经典', 'DeMark TD 序列的公开规则（国内叫“神奇九转”）',
+         '连续 9 根收盘都比 4 根之前低（低九），第 8、9 根的最低价不高于第 6、7 根（完善），收盘没破风险线，三项齐了才算。止损是风险线，目标是 TDST。做空一侧看高九。',
+         ['数到 9', '完善', '没破风险线']),
+    _gen(m_supertrend, '开源经典', 'Supertrend 的公开算法（参照 DaveSkender/Stock.Indicators，Apache-2.0）',
+         '价格在超级趋势线上方算多头，那条线就是止损。收盘离线超过 1 个 ATR 不追，等它回到线附近。原版本来就做两个方向。',
+         ['趋势向上', '离线不远']),
+    _gen(m_squeeze, '开源经典', 'TTM Squeeze 的公开定义（布林带缩进肯特纳通道）；突破写法参考 vn.py 的通道策略（MIT）',
+         '布林带缩进肯特纳通道里至少 5 根（收口），之后收盘放量突破收口区间，三项齐了才算。止损在区间中线，目标是往外量一个区间高度。原版本来就做两个方向。',
+         ['收口过', '收盘突破上沿', '突破放量']),
+    _gen(m_mabull, '开源经典', '国内看盘软件常用的均线多头排列 + MACD 背离（公开写法）',
+         'MA5、10、20、60 从上到下排好、都在往上（多头排列），回踩 20 日线收盘没跌破，最近两个高点没有 MACD 顶背离，三项齐了才算。做空一侧是空头排列加底背离。',
+         ['均线多头排列', '回踩 20 日线不破', '没有 MACD 顶背离']),
+    # 第二批：zaki 用 Grok（X）和另一个助手（抖音）找的两份候选清单里，挑出来的五个（2026-11-18）
+    _gen(m_rsi2, '开源经典', 'Larry Connors《Short Term Trading Strategies That Work》（2008）的 2 日 RSI 规则',
+         '只在收盘高于 200 日均线时做：2 日 RSI 跌到 5 以下，收盘进场；收盘站回 5 日均线就离场。原版不设价格止损，卡片上的止损是参考【估算】。做空一侧：200 日线下方、2 日 RSI 高于 95。',
+         ['收盘在 200 日线上方', '2 日 RSI 超卖']),
+    _gen(m_double7, '开源经典', 'Larry Connors《Short Term Trading Strategies That Work》（2008）的 Double 7\'s',
+         '收盘高于 200 日均线、又收出最近 7 根里最低的收盘，就进场；收到最近 7 根里最高就离场。原版不设价格止损，卡片上的止损是参考【估算】。原版只做多，做空一侧是翻过来用的。',
+         ['收盘在 200 日线上方', '7 日最低收盘']),
+    _gen(m_nr7, '开源经典', 'Toby Crabel 的 NR7；止损、目标照 backtrader 公开文档里的示例规则（GPL，只照规则不抄代码）',
+         '前一根的振幅是最近 7 根里最窄的，今天收盘冲过那一根的最高价，就进场。止损 2.5 个 ATR，目标 4 个 ATR，5 根没走出来就离场。做空一侧上下翻过来。',
+         ['前一根是 NR7', '收盘突破']),
+    _gen(m_darvas, '开源经典', 'Nicolas Darvas《How I Made $2,000,000 in the Stock Market》（1960）的箱体法',
+         '52 周新高之后 3 根没被超过定箱顶，之后的低点 3 根没被跌破定箱底；收盘站上箱顶、量不比 20 日均量少就进场，收盘跌破箱底离场。原版只做多。',
+         ['52 周新高', '箱子成形', '收盘突破箱顶', '突破不缩量']),
+    _gen(m_minervini, '开源经典', 'Mark Minervini《Trade Like a Stock Market Wizard》（2013）的 Trend Template',
+         '检查一只票像不像强势股：收盘 > 50 > 150 > 200 日均线、200 日均线往上、比一年最低高 30% 以上、离一年最高不到 25%。观察用，不给价位，也不是买点。',
+         ['均线排好', '200 日均线往上', '离一年低点够远', '离一年高点够近']),
 )
-ORDER = ('four', 'ertan', 'feidao', 'houshou', 'sanjiao', 'sanfen', 'breakout', 'bubao', 'genzhuang', 'huitou', 'yindie', 'shui', 'huiben')
+ORDER = ('four', 'ertan', 'feidao', 'houshou', 'sanjiao', 'sanfen', 'breakout', 'bubao', 'genzhuang', 'turtle', 'td9', 'supertrend', 'squeeze', 'mabull',
+         'rsi2', 'double7', 'nr7', 'darvas', 'minervini', 'huitou', 'yindie', 'shui', 'huiben')
 MODELS = tuple(sorted(MODELS, key=lambda m: ORDER.index(m['key']) if m['key'] in ORDER else len(ORDER)))
 MODEL = {m['key']: m for m in MODELS}
 WATCH_SIDE = dict(long='上行', short='下行')
@@ -414,18 +449,20 @@ def four_pre(st):
     return dict(zone=[hs.px(aw), hs.px(aw * 1.02)], mid=hs.px(mid), stop=hs.px(stop), t1=hs.px(tgt), t2=None, rr=hs.r2((tgt - mid) / (mid - stop)))
 
 
-def generic_signal(M, B, P, i, side, hz, tf, pos, core):
-    """One model module built on qmodel.py → the same signal / card / overlay / history the hand-written adapters give."""
+def generic_signal(M, B, P, i, side, hz, tf, pos, core, lite=False):
+    """One model module built on qmodel.py → the same signal / card / overlay / history the hand-written adapters give.
+    lite: skip the history replay (see result())."""
     mod = M['mod']
     r = qm.compute(mod, B, i, side, P=P, with_history=False)
-    hist = qm.history(P, mod.KEY, mod.core, i, hz)
+    hist = dict(n=0, rows=[], note='', hold=hz) if lite else qm.history(P, mod.KEY, mod.core, i, hz)
     sig = {k: r[k] for k in ('phase', 'verdict', 'state', 'list', 'missing', 'next_needs', 'note', 'zone', 'mid', 't1', 't2', 'rr')}
     sig.update(checks=[{k: c[k] for k in ('k', 'name', 'ok', 'why')} for c in r['checks']],
                asks=[{k: c[k] for k in ('k', 'ask', 'yes', 'no', 'sticker_yes', 'sticker_no', 'good', 'draw', 'ok', 'why')} for c in r['checks']],
                verdict_text=r.get('verdict_text') or r['verdict'], phase_text=r.get('phase_text') or r['phase'], anchor=None,
                stop=None if core else r['stop'], stop_note='核心仓不适用' if core and r['stop'] is not None else '手动止损',
                t2_note=r['t2_note'] if r['zone'] else '条件没齐，不给目标', hook=r.get('hook'), story=r.get('story'),
-               params=r['params'], est_note=getattr(mod, 'EST_NOTE', {}), video_note=getattr(mod, 'VIDEO_NOTE', {}))
+               params=r['params'], est_note=getattr(mod, 'EST_NOTE', {}), video_note=getattr(mod, 'VIDEO_NOTE', {}),
+               **({'source_note': mod.SOURCE_NOTE} if getattr(mod, 'SOURCE_NOTE', None) else {}))
     for k in getattr(mod, 'EXTRA', ()):          # 模型自己的几样事实（交给 AI 和模板用），例如前低、颈线、量山的位置
         if r.get(k) is not None:
             sig[k] = r[k]
@@ -543,14 +580,16 @@ def legend(model, sig, lines, core, side='long', four=None, extra=None):
 
 # ---------- the response ----------
 
-def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmode='auto'):
+def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmode='auto', lite=False):
+    """lite: only what the model says at this bar (state, checks, plan, preplan). No history replay, no structure lines, no gauge:
+    the signal itself comes out exactly the same, just fast (AI 对话的 models_now 用它把每个模型都算一遍)."""
     a = norm(model, side, horizon, tf, posmode)
     model, side, hz, tf, posmode = a['model'], a['side'], a['horizon'], a['tf'], a['posmode']
     M = MODEL[model]
     with _lock:
         t0 = time.perf_counter()
         if tf == 'D':
-            st = panel.state_at(t, asof or None)
+            st = state_at(t, asof)
             i, asof_d, is_latest, price = st['index'], st['asof'], st['is_latest'], hs.r2(st['close'])
             B, PL = prepared(t, 'long', 'D')
         else:
@@ -564,9 +603,9 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
         side_ok, tf_ok = side in M['sides'], tf in M['tfs']
         core = pos['core'] and side == 'long'
         hsr = hs.compute(B, i, anchors().get(akey(t, 'long', tf)), with_history=False, P=PL)       # 做多一侧的结构：斐波那契用它的起涨低点和最高点
-        lines, n_struct = structure.lines(PL, i, hsr, None, win=SR_WIN[hz])
+        lines, n_struct = ([], 0) if lite else structure.lines(PL, i, hsr, None, win=SR_WIN[hz])
         t1 = time.perf_counter()
-        score = chart_score.compute(PL, i, hz)
+        score = None if lite else chart_score.compute(PL, i, hz)
         overlay, hist = None, dict(n=0, rows=[], note='', hold=hz)
         pre, basis = None, ''           # 预案价位（只给 AI 对话）
         if not side_ok or not tf_ok:
@@ -584,7 +623,8 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
             P = PL if side == 'long' else prepared(t, 'short', tf)[1]
             r = hsr if side == 'long' else hs.compute(B, i, anchors().get(akey(t, side, tf)), with_history=False, P=P)
             am = P['d'].index(r['anchor']['date']) if r['anchor'] and r['anchor']['by'] == 'manual' else None
-            hist = hs.history(P, i, am, hz)
+            if not lite:
+                hist = hs.history(P, i, am, hz)
             sig = {k: r[k] for k in ('phase', 'verdict', 'list', 'checks', 'missing', 'next_needs', 'note', 'anchor', 'avwap', 'sd', 'dist_pct',
                                      'pushes', 'abcd', 'zone', 'mid', 't1', 'rr', 'start_low', 'top', 'base')}
             sig.update(stop=None if core else r['stop'], stop_note='核心仓不适用' if core and r['stop'] is not None else '手动止损',
@@ -604,7 +644,8 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
         elif model == 'breakout':
             P = PL if side == 'long' else prepared(t, 'short', tf)[1]
             r = bo.compute(B, i, side, with_history=False, P=P)
-            hist = bo.history(P, i, hz)
+            if not lite:
+                hist = bo.history(P, i, hz)
             sig = {k: r[k] for k in ('phase', 'verdict', 'verdict_text', 'list', 'checks', 'missing', 'next_needs', 'note', 'level', 'brk', 'extreme', 'pull', 'box',
                                      'dist_pct', 'zone', 'mid', 't1', 't2', 'rr')}
             sig.update(stop=None if core else r['stop'], stop_note='核心仓不适用' if core and r['stop'] is not None else '手动止损',
@@ -620,7 +661,7 @@ def result(t, model='houshou', asof=None, side='long', horizon=20, tf='D', posmo
             name, version = bo.NAME, bo.VERSION
         elif M.get('mod'):
             P = PL if side == 'long' else prepared(t, 'short', tf)[1]
-            sig, card, overlay, hist, model_legend = generic_signal(M, B, P, i, side, hz, tf, pos, core)
+            sig, card, overlay, hist, model_legend = generic_signal(M, B, P, i, side, hz, tf, pos, core, lite)
             pre = sig.pop('pre', None)
             name, version = M['name'], M['version']
         else:
@@ -730,6 +771,100 @@ def scan_cell(t, model, side, horizon=20, tf='D', asof=None):
                     target=sum(1 for r in q['history']['rows'] if r['outcome'] == 'target'), stop=sum(1 for r in q['history']['rows'] if r['outcome'] == 'stop'),
                     none=sum(1 for r in q['history']['rows'] if r['outcome'] in ('none', 'open'))), n=q['history']['n'], hold=q['history'].get('hold'),
                     rr_median=q['history'].get('rr_median')))
+
+
+def models_now(t, asof=None, tf='D'):
+    """AI 对话用的一张小表：这只标的、这一天，每个模型每个方向现在怎么说（一行一个）。条件齐了带计划价位（plan），
+    没齐但有预案的带预案（preplan）。用 result(lite=True) 算：不重放历史、不画线，判定和面板上的一模一样。
+    只给对话，不进 AI 解读和它的指纹。"""
+    rows = []
+    for m in MODELS:
+        if tf not in m['tfs']:
+            continue
+        for side in m['sides']:
+            q = result(t, m['key'], asof, side, 20, tf, 'flat', lite=True)
+            s = q['signal']
+            row = dict(model=q['model_name'], side=q['side_name'], state=STATE_TEXT[s['state']], verdict=s['verdict_text'])
+            if s['checks']:
+                row['checks'] = f"{sum(1 for c in s['checks'] if c['ok'])}/{len(s['checks'])}"
+            if s.get('zone'):
+                row['plan'] = {k: s[k] for k in ('zone', 'stop', 't1', 't2', 'rr') if s.get(k) is not None}
+            elif q.get('preplan'):
+                row['preplan'] = {k: q['preplan'][k] for k in ('zone', 'stop', 't1', 't2', 'rr') if q['preplan'].get(k) is not None}
+            rows.append(row)
+    return rows
+
+
+AUTO_NOTE = '按走势匹配：只看哪个模型认得出现在这段走势、离条件齐有多近。这些模型都没回测过，排在前面不代表更能赚钱。'
+AUTO_TIER = dict(ready=0, wait=1, avoid=3)       # 条件齐 → 等（有预案）→ 等 → 不追；用不上、已失效不参加
+
+
+_ST = {}
+
+
+def state_at(t, asof=None):
+    """panel.state_at 加一层小缓存：同一份日线、同一天，四要素引擎只算一次。自动匹配和对话要把每个模型都算一遍，
+    原来每个模型都会把引擎从头重算一次。日线文件一变，panel.load 换成新的那份，缓存自然失效。引擎本身不动。"""
+    B = panel.load(t)['B']
+    key = (t, asof or None, id(B), len(B['d']), B['d'][-1] if len(B['d']) else None)
+    with _lock:
+        hit = _ST.get(key)
+        if hit is None:
+            if len(_ST) > 64:
+                _ST.clear()
+            hit = _ST[key] = panel.state_at(t, asof or None)
+        return hit
+
+
+def score_at(t, asof=None, tf='D', hz=20):
+    """表盘（综合评分）在这一根上的值，和「当前图表」那一栏是同一个数。自动匹配卡顶上那一行“走势”用它。"""
+    with _lock:
+        if tf == 'D':
+            i = state_at(t, asof)['index']
+            PL = prepared(t, 'long', 'D')[1]
+        else:
+            if t not in panel.TICKERS:
+                raise KeyError(t)
+            B, PL = prepared(t, 'long', 'W')
+            i = panel.index_at(B, asof or None)
+        return chart_score.compute(PL, i, hz)
+
+
+def auto_match(t, side='long', asof=None, tf='D', posmode='auto', horizon=20):
+    """「自动匹配」：点做多 / 做空时，把这一侧每个交易模型在这一根上算一遍（lite，不重放历史），排出谁认得出现在的走势、离条件齐最近。
+    排序只用模型自己的判定，不另起一套规则：条件齐 → 等（有预案）→ 等 → 不追；同一档里清单成立得多的在前，再按模型库的顺序。
+    排第一的就是 pick（图上画它）。用不上、已失效的单列；观察用的模型不参加挑选，有提示的列在 watch 里。"""
+    a = norm('four', side, horizon, tf, posmode)            # 不认识的 side / hz / tf / pos：400
+    side, hz, tf, posmode = a['side'], a['horizon'], a['tf'], a['posmode']
+    matched, watch, unused, head = [], [], [], None
+    for n, m in enumerate(MODELS):
+        if side not in m['sides'] or tf not in m['tfs']:
+            continue
+        q = result(t, m['key'], asof, side, hz, tf, posmode, lite=True)
+        head = head or q
+        s = q['signal']
+        ok, of = sum(1 for c in s['checks'] if c['ok']), len(s['checks'])
+        row = dict(key=m['key'], name=q['model_name'], group=m.get('group', ''), kind=m.get('kind', 'trade'), side_name=q['side_name'], state=s['state'],
+                   state_text=STATE_TEXT[s['state']], verdict=s['verdict_text'], ok=ok, of=of)
+        if s.get('zone'):
+            row['plan'] = {k: s[k] for k in ('zone', 'stop', 't1', 't2', 'rr') if s.get(k) is not None}
+        elif q.get('preplan'):
+            row['preplan'] = {k: q['preplan'][k] for k in ('zone', 'stop', 't1', 't2', 'rr') if q['preplan'].get(k) is not None}
+        if m.get('kind') == 'watch':
+            (watch if s['state'] in ('risk', 'watch') and of else unused).append(row)
+        elif s['state'] in AUTO_TIER:
+            row['_rank'] = (AUTO_TIER[s['state']] + (1 if s['state'] == 'wait' and 'preplan' not in row else 0), -(ok / of if of else 0), n)
+            matched.append(row)
+        else:
+            unused.append(row)
+    matched.sort(key=lambda r: r['_rank'])
+    for r in matched:
+        del r['_rank']
+    sc = score_at(t, head['asof'] if head else asof, tf, hz)
+    return dict(ok=True, ticker=t, asof=head['asof'] if head else asof, price=head['price'] if head else None, side=side, side_name=SIDE_NAME[side], tf=tf, horizon=hz,
+                pick=matched[0]['key'] if matched else None, pick_name=matched[0]['name'] if matched else None,
+                trend=dict(total=sc['total'], label=sc['label'], why='；'.join(p['why'] for p in sc['parts'] if p['name'] in ('趋势', '动量'))),
+                matched=matched, watch=watch, unused=unused, note=AUTO_NOTE)
 
 
 # ---------- template narration (no API) ----------

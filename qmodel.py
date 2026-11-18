@@ -136,6 +136,14 @@ def plan(P, zlo, zhi, stop, t1, t2=None, t2_note='', t2_none=''):
                 _bad=hs.plan_check(P['s'], mid, stop, t1))      # 价位在显示的位数下分不开：settle() 会把这次“条件齐”收回
 
 
+def r_plan(zlo, zhi, stop, r1, r2):
+    """原版没有目标价的趋势规则（海龟、超级趋势）：两个目标按“止损距离”的倍数量（R 倍数）。
+    止损先照 plan() 的做法挪到建仓区外面，再从建仓区中间量，所以第一目标一定在建仓区外面。返回 (zlo, zhi, stop, t1, t2)。"""
+    stop = min(stop, dn(zlo, 0.005))
+    mid = (zlo + zhi) / 2
+    return zlo, zhi, stop, mid + r1 * (mid - stop), mid + r2 * (mid - stop)
+
+
 def preplan(P, zlo, zhi, stop, t1, t2=None):
     """预案价位：清单还没齐时，假如还差的那几项就在今天收盘成立，计划会落在哪。和 plan() 是同一套公式，只交给 AI 对话（信号卡照旧不给价位）。
     价位在显示的位数下分不开、或者第一目标没有越过入场区，就不给。模型文件只在“还差的那几项以后还可能成立”的时候调用它；
@@ -293,7 +301,7 @@ def compute(mod, B, i=None, side='long', P=None, with_history=True, hold=None):
     r = settle(P, mod.KEY, mod.core, i)
     res = {k: v for k, v in r.items() if not k.startswith('_')}
     res.update(model=mod.VERSION, name=mod.NAME, side=P['side'], asof=P['d'][i], index=i, close=r2(P['s'] * P['c'][i]),
-               params=dict(video=getattr(mod, 'VIDEO', {}), est=getattr(mod, 'EST', {})))
+               params=dict(video=getattr(mod, 'VIDEO', {}), est=getattr(mod, 'EST', {}), **({'source': mod.SOURCE} if getattr(mod, 'SOURCE', None) else {})))   # source：开源原版里的数
     if with_history:
         res['history'] = history(P, mod.KEY, mod.core, i, hold or 20)
     return res

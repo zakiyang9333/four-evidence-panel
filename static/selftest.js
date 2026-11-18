@@ -481,8 +481,8 @@
       ok('quant_model_cards', nModels >= 13 && document.querySelectorAll('#qModelCards .mcard').length === nModels && document.querySelector('#qModelCards .mcard.on').dataset.model === 'houshou' &&
         /没有这一侧的规则/.test(document.querySelector('#qModelCards .mcard[data-model=four]').textContent) && document.querySelectorAll('#qModelCards button.m-side').length === sideBtns,
         [nModels, document.querySelectorAll('#qModelCards button.m-side').length, sideBtns]);
-      ok('quant_model_dropdown_grouped', document.querySelectorAll('#qModel optgroup').length >= 4 && document.querySelectorAll('#qModel option').length === nModels &&
-        !!document.querySelector('#qModel option[value=yindie]'), document.querySelectorAll('#qModel option').length);
+      ok('quant_model_dropdown_grouped', document.querySelectorAll('#qModel optgroup').length >= 4 && document.querySelectorAll('#qModel option').length === nModels + 1 &&
+        document.querySelector('#qModel option').value === '__auto' && !!document.querySelector('#qModel option[value=yindie]'), document.querySelectorAll('#qModel option').length);     // 最上面多一项「自动匹配」
       document.querySelector('#qModelCards .mcard[data-model=breakout] button.m-side[data-side=short]').click();     // 在模型页里点「破位反抽 · 做空」
       await until(() => QF.fresh() && QF.model() === 'breakout' && QF.side() === 'short' && QF.tab() === 'analyze', 8000); await frame();
       const bd = QF.data();
@@ -528,6 +528,23 @@
       ok('quant_task_pause_and_delete', paused && !document.querySelector('#qTaskList .task') && !$('#qTaskNew').disabled);
       document.querySelector('#qRunList .run-row').click(); await until(() => QF.fresh() && QF.model() === 'houshou' && QF.side() === 'long' && QF.tab() === 'analyze', 8000); await frame();
       ok('quant_run_log_restores', runs0 >= 1 && QF.side() === 'long' && $('#qLong').classList.contains('on') && S.ticker === 'NVDA', runs0);
+      // 自动匹配：模型下拉最上面那一项。选上以后按走势挑这一侧的模型，图上换成排第一的；点做空就换成做空一侧的
+      sel.value = '__auto'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await until(() => QF.auto().on && QF.auto().res && QF.auto().res.side === 'long' && QF.fresh(), 20000); await frame();
+      const ar = QF.auto().res;
+      ok('quant_auto_long', !!ar && QF.side() === 'long' && !$('#qAuto').hidden && $('#qModel').value === '__auto' && /自动匹配 · 做多/.test($('#qAuto').textContent) &&
+        document.querySelectorAll('#qAuto .q-auto-row').length === ar.matched.length && (ar.pick ? QF.model() === ar.pick : true) && /没回测过/.test($('#qAuto').textContent), ar && [ar.pick, QF.model(), ar.matched.length]);
+      $('#qShort').click(); await until(() => QF.auto().res && QF.auto().res.side === 'short' && QF.fresh() && QF.side() === 'short', 20000); await frame();
+      const as = QF.auto().res;
+      ok('quant_auto_short_picks', !!as && as.side === 'short' && (as.pick ? QF.model() === as.pick : true) && /自动匹配 · 做空/.test($('#qAuto').textContent) && $('#qModel').value === '__auto' &&
+        (!as.matched.length || !!document.querySelector('#qAuto .q-auto-row.cur')) && !/买入|下单/.test($('#qAuto').textContent), as && [as.pick, QF.model()]);
+      const other = document.querySelectorAll('#qAuto .q-auto-row')[1];          // 点列表里另一行：图上换成它，仍在自动匹配里
+      if (other) {
+        const k = other.dataset.autoUse; other.click(); await until(() => QF.fresh() && QF.model() === k, 8000); await frame();
+        ok('quant_auto_row_switches', QF.model() === k && QF.auto().on && document.querySelector('#qAuto .q-auto-row.cur').dataset.autoUse === k, k);
+      }
+      sel.value = 'houshou'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.model() === 'houshou', 8000); await frame();
+      ok('quant_auto_off_by_hand', !QF.auto().on && $('#qAuto').hidden && $('#qModel').value === 'houshou');       // 自己在下拉里选一个模型：退出自动匹配
       sel.value = 'four'; sel.dispatchEvent(new Event('change', { bubbles: true })); await until(() => QF.fresh() && QF.model() === 'four' && QF.side() === 'long', 8000); await frame();
       ok('quant_back_to_four', $('#qBar').hidden && !$('#evidence').hidden && lit() === S.state.lit && /四要素规则引擎/.test($('#sigCard').textContent) && document.querySelectorAll('#tiles .tile').length === 6 &&
         /第二目标/.test($('#tiles').textContent) && /做多/.test($('#sigCard .chip-dir').textContent));
@@ -546,7 +563,9 @@
       const inp = $('#modalBody .note-form input'); inp.value = '自检写的一条';
       $('#modalBody .note-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       const added = await until(() => NF.data() && (NF.data().by_date[day] || []).some(r => r.title === '自检写的一条'), 8000); await frame();
-      ok('notes_manual_note_marks_the_bar', added && before === 0 && markAt() > 0 && /自检写的一条/.test($('#modalBody').textContent) && lit() === S.state.lit, [added, before, markAt()]);
+      // 写了备注以后，那根 K 线底部要多出一个标记。不要求原来那里是空的：底部那条带上偶尔还有别的标记（四证在最低那根下面写的字之类），
+      // 有时候画得比这一步早，原来那样写就时灵时不灵
+      ok('notes_manual_note_marks_the_bar', added && markAt() - before >= 2000 && /自检写的一条/.test($('#modalBody').textContent) && lit() === S.state.lit, [added, before, markAt()]);
       // 解说卡片在图上标到这一天时，把这天的备注带在卡片上
       window.FENarrate.show({ ok: true, source: 'claude', ticker: S.ticker, asof: S.state.asof, model: 'selftest', polish: { enabled: false, reason: '', model: 'x' }, narration: { hook: '自检', story: '自检', final: '还不抄', watch: [],
         steps: [{ q: '那天', say: '这天有事', sticker: '', tone: 'neutral', evidence: 0, ok: null, draw: [{ type: 'point', date: day, price: S.bars.l[S.asof - 3], label: '坑' }] },

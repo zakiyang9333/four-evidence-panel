@@ -19,7 +19,11 @@ window.FEQuant = (() => {
   const CLOCK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>';
   let c = null;
   const Q = { model: 'four', side: 'long', hz: 20, pos: 'auto', tab: 'analyze', wide: false, data: null, seq: 0, linesOn: false, shown: 1e9, running: false, off: {}, steps: null, total: null,
-    animUntil: 0, speed: 'normal', autoScroll: true, legendOn: true, lib: null, scan: null, scanKey: '', tasks: null, tasksAt: 0, runs: null, ranOnce: false };
+    animUntil: 0, speed: 'normal', autoScroll: true, legendOn: true, lib: null, scan: null, scanKey: '', tasks: null, tasksAt: 0, runs: null, ranOnce: false,
+    auto: false, autoRes: null, autoSeq: 0 };
+  /* 「自动匹配」：模型下拉最上面那一项。选上以后，点做多 / 做空就按现在的走势挑这一侧的模型（后端 /api/quant/auto 用模型自己的判定排序），
+     图上换成排第一的那个，上面列出这一侧认得出这段走势的全部模型。只是挑着看，不会替你交易 */
+  const AUTO = '__auto';
 
   const esc = s => c.esc(s);
   const tf = () => c.S.tf === 'W' ? 'W' : 'D';
@@ -47,6 +51,8 @@ window.FEQuant = (() => {
     Q.pos = POS.indexOf(g('qpos', 'auto')) >= 0 ? g('qpos', 'auto') : 'auto';
     Q.tab = TABS.indexOf(g('qtab', 'analyze')) >= 0 && g('qtab', 'analyze') !== 'chat' ? g('qtab', 'analyze') : 'analyze';
     Q.wide = !!g('qwide', false); Q.linesOn = !!g('qlines', false); Q.off = g('qoff', {}) || {};
+    Q.auto = g('qauto', false) === true;
+    if (q.get('qauto') === '1') Q.auto = true;
     Q.speed = SPEED[g('qspeed', 'normal')] ? g('qspeed', 'normal') : 'normal'; Q.autoScroll = g('qscroll', true) !== false; Q.legendOn = g('qlegendOn', true) !== false;
     if (q.get('model') && /^[a-z0-9_]{2,24}$/.test(q.get('model'))) Q.model = q.get('model');      // 网址参数：截图和自检用
     if (q.get('dir') === 'short' || q.get('dir') === 'long') Q.side = q.get('dir');             // 方向用 dir：side 这个参数名已经被“窗口开没开”占了
@@ -58,10 +64,18 @@ window.FEQuant = (() => {
 
     const fill = (sel, rows, val) => { sel.textContent = ''; rows.forEach(r => { const o = document.createElement('option'); o.value = r[0]; o.textContent = r[1]; sel.appendChild(o); }); sel.value = val; };
     fill($('#qModel'), MODELS, Q.model); fill($('#qHz'), HZ.map(n => [n, hzLabel(n)]), Q.hz); fill($('#qPos'), POS.map(k => [k, POS_NAME[k]]), Q.pos);
-    $('#qModel').onchange = e => setModel(e.target.value);
+    $('#qModel').onchange = e => {
+      const v = e.target.value;           // 先记下选的是哪个：退出自动匹配时 chrome() 会把下拉重设成当前模型
+      if (v === AUTO) setAuto(true); else { setAuto(false); setModel(v); }
+    };
     $('#qHz').onchange = e => set({ hz: Number(e.target.value) });
     $('#qPos').onchange = e => set({ pos: e.target.value });
-    $$('#qDir button').forEach(b => { b.onclick = () => set({ side: b.dataset.side }); });
+    $$('#qDir button').forEach(b => { b.onclick = () => (Q.auto ? autoRun(b.dataset.side) : set({ side: b.dataset.side })); });
+    $('#qAuto').addEventListener('click', e => {
+      const b = e.target.closest('[data-auto-use]');
+      if (b) { use(b.dataset.autoUse, Q.autoRes ? Q.autoRes.side : Q.side, null, true); return; }
+      if (e.target.closest('#qAutoAsk')) askCombined();
+    });
     $('#qRun').onclick = run;
     $$('#qTabs [data-qtab]').forEach(b => { b.onclick = () => setTab(b.dataset.qtab); });
     menu('#qTfBtn', '#qTfPop'); menu('#qSetBtn', '#qSetPop', settingsPop);
@@ -96,8 +110,9 @@ window.FEQuant = (() => {
     const sig = list.map(m => m.key + m.name + (m.group || '')).join('|');
     if (sig !== modelSig) {
       modelSig = sig;
-      MODELS.length = 0; list.forEach(m => MODELS.push([m.key, m.name, m.group || '', m.kind || 'trade', m.default_side || 'long', m.default_hz || 20]));
+      MODELS.length = 0; list.forEach(m => MODELS.push([m.key, m.name, m.group || '', m.kind || 'trade', m.default_side || 'long', m.default_hz || 20, m.sides || ['long']]));
       const sel = $('#qModel'); sel.textContent = '';
+      const ao = document.createElement('option'); ao.value = AUTO; ao.textContent = '自动匹配（按走势选模型）'; sel.appendChild(ao);
       const groups = [];
       list.forEach(m => { if (groups.indexOf(m.group || '') < 0) groups.push(m.group || ''); });
       groups.forEach(gname => {
@@ -107,7 +122,7 @@ window.FEQuant = (() => {
       });
     }
     if (!MODELS.some(m => m[0] === Q.model)) { Q.model = 'four'; c.store.set('qmodel', Q.model); }
-    $('#qModel').value = Q.model;
+    $('#qModel').value = Q.auto ? AUTO : Q.model;
   }
 
   /* 窗口头部和分析卡上那些跟着输入变的文字 */
@@ -119,13 +134,14 @@ window.FEQuant = (() => {
     $('#qTfText').textContent = ((Q.data && Q.data.adjust_short) || '拆股复权') + ' · ' + (W ? '周K' : '日K');
     $$('#qTfPop [data-qtf]').forEach(b => b.classList.toggle('on', b.dataset.qtf === tf()));
     $('#qChartSub').textContent = (W ? '周线' : '日线') + ' · ' + adj + ' · 历史数据重放';
-    $('#qModel').value = Q.model; $('#qPos').value = Q.pos;
+    $('#qModel').value = Q.auto ? AUTO : Q.model; $('#qPos').value = Q.pos;
     const hz = $('#qHz'); [...hz.options].forEach(o => { o.textContent = hzLabel(Number(o.value)); }); hz.value = String(Q.hz);
     $$('#qDir button').forEach(b => {
       b.classList.toggle('on', b.dataset.side === Q.side); b.setAttribute('aria-pressed', b.dataset.side === Q.side ? 'true' : 'false');
       const lab = watch() ? (b.dataset.side === 'long' ? '上行' : '下行') : (b.dataset.side === 'long' ? '做多' : '做空');
       if (b.lastChild && b.lastChild.nodeType === 3) b.lastChild.textContent = lab; else b.appendChild(document.createTextNode(lab));
-      b.title = watch() ? (b.dataset.side === 'long' ? '上行：看往上那一侧的情形（观察用，不给价位）' : '下行：看往下那一侧的情形（观察用，不给价位）')
+      b.title = Q.auto ? (b.dataset.side === 'long' ? '做多：按现在的走势，挑做多一侧认得出这段走势的模型来看' : '做空：按现在的走势，挑做空一侧认得出这段走势的模型来看。只是换一个方向分析，不会替你交易')
+        : watch() ? (b.dataset.side === 'long' ? '上行：看往上那一侧的情形（观察用，不给价位）' : '下行：看往下那一侧的情形（观察用，不给价位）')
         : (b.dataset.side === 'long' ? '做多：用这个模型做多一侧的规则来看' : '做空：用这个模型做空一侧的规则来看。只是换一个方向分析，不会替你交易');
     });
     $('#side').classList.toggle('q-watch', watch());
@@ -150,7 +166,75 @@ window.FEQuant = (() => {
   function setModel(m) { set({ model: MODELS.some(x => x[0] === m) ? m : 'four' }); }
   const modelGroup = k => (MODELS.find(x => x[0] === k) || [])[2] || '';
   /* 换成另一个模型（可以顺带指定方向、K 线级别）：信号卡上“换用”按钮和模型页都走这里 */
-  function use(model, side, qtf) { if (qtf && qtf !== tf()) c.setTf(qtf); set({ model: model || Q.model, side: side || Q.side }); }
+  function use(model, side, qtf, keepAuto) {
+    if (!keepAuto && Q.auto) setAuto(false);          // 自己点了某个模型：退出自动匹配
+    if (qtf && qtf !== tf()) c.setTf(qtf);
+    set({ model: model || Q.model, side: side || Q.side, hz: keepAuto ? Q.hz : undefined });
+    if (keepAuto) renderAuto();
+  }
+
+  // ---------- 自动匹配 ----------
+  const sideOk = (k, s) => ((MODELS.find(x => x[0] === k) || [])[6] || []).indexOf(s) >= 0;
+  const autoKey = side => c.S.ticker + '|' + c.asofDate() + '|' + tf() + '|' + side;
+  const autoFresh = () => !!(Q.autoRes && Q.autoRes._key === autoKey(Q.side));
+  function setAuto(on) {
+    on = !!on;
+    if (on === Q.auto) { if (on) autoRun(Q.side); return; }
+    Q.auto = on; c.store.set('qauto', on);
+    if (!on) { Q.autoSeq++; Q.autoRes = null; }
+    chrome(); renderAuto();
+    if (on) autoRun(Q.side);
+  }
+  /* 点做多 / 做空：后端把这一侧每个模型在这一根上算一遍、排好序；图上换成排第一的。一个都认不出来，就留在原来的模型（它没有这一侧就换一个有的） */
+  async function autoRun(side) {
+    side = side === 'short' ? 'short' : 'long';
+    if (!c.stateFresh()) { if (side !== Q.side) set({ side }); return; }          // 图表还没到：先记下方向，到了再挑（onState）
+    const my = ++Q.autoSeq, key = autoKey(side);
+    if (!Q.autoRes || Q.autoRes._key !== key) { $('#qAuto').hidden = false; $('#qAuto').innerHTML = '<div class="muted small">正在按走势挑' + (side === 'long' ? '做多' : '做空') + '一侧的模型…</div>'; }
+    try {
+      const r = await c.api('/api/quant/auto?ticker=' + c.S.ticker + '&side=' + side + '&hz=' + Q.hz + '&tf=' + tf() + '&pos=' + Q.pos + '&asof=' + c.asofDate());
+      if (my !== Q.autoSeq || !Q.auto) return;
+      if (r.ok === false) throw new Error(r.error);
+      r._key = key; Q.autoRes = r;
+      const model = r.pick || (sideOk(Q.model, side) ? Q.model : (MODELS.find(x => (x[6] || []).indexOf(side) >= 0 && x[3] !== 'watch') || [Q.model])[0]);
+      const before = Q.model + '|' + Q.side;
+      set({ model, side, hz: Q.hz });
+      if (Q.model + '|' + Q.side === before && !fresh()) fetch();
+      renderAuto();
+    } catch (e) { if (my === Q.autoSeq) { c.toast('自动匹配没取到：' + e.message, true); Q.autoRes = null; renderAuto(); } }
+  }
+  function renderAuto() {
+    const el = $('#qAuto'), r = Q.autoRes;
+    if (!Q.auto) { el.hidden = true; el.innerHTML = ''; return; }
+    el.hidden = false;
+    if (!r) { if (!el.innerHTML) el.innerHTML = '<div class="muted small">自动匹配：点「做多」或「做空」，按现在的走势挑这一侧的模型。</div>'; return; }
+    const P = x => (x == null ? '—' : c.fmtP(x));
+    const px = x => {
+      const p = x.plan || x.preplan;
+      return p ? '<small class="q-auto-px">' + (x.plan ? '计划' : '预案（条件齐了才算数）') + '：入场 ' + P(p.zone[0]) + '–' + P(p.zone[1]) + (p.stop != null ? ' · 止损 ' + P(p.stop) : '') +
+        (p.t1 != null ? ' · 第一目标 ' + P(p.t1) : '') + '</small>' : '';
+    };
+    let h = '<div class="w-title">自动匹配 · ' + esc(r.side_name) + ' · ' + esc(r.ticker) + ' ' + esc(r.asof) + '</div>' +
+      '<p class="q-auto-trend">走势：<b>' + esc(r.trend.label) + '</b>（' + (r.trend.total > 0 ? '+' : '') + r.trend.total + '）' + (r.trend.why ? '，' + esc(r.trend.why) : '') + '</p>';
+    if (r.matched.length) {
+      h += '<div class="q-auto-sub">认得出这段走势的模型（' + r.matched.length + ' 个），排在前面的离条件齐更近。图上画的是 <b>' + esc(modelName(Q.model)) + '</b>，点别的一行换着看。</div><div class="q-auto-list">' +
+        r.matched.map((x, i) => '<button class="q-auto-row ' + (STATE_CLS[x.state] || 'na') + (x.key === Q.model ? ' cur' : '') + '" data-auto-use="' + esc(x.key) + '" title="图上换成这个模型">' +
+          '<i>' + num(i + 1) + '</i><span class="q-auto-name">' + esc(x.name) + '</span><em>' + esc(x.state_text) + (x.of ? ' · 清单 ' + x.ok + '/' + x.of : '') + '</em>' + px(x) + '</button>').join('') + '</div>';
+    } else {
+      h += '<p class="muted small">这一侧没有模型认得出现在的走势，每个模型都说“用不上”。图上留着原来的模型。</p>';
+    }
+    if (r.watch.length) h += '<p class="q-auto-watch">观察提示：' + r.watch.map(x => esc(x.name) + ' ' + esc(x.state_text) + (x.of ? '（' + x.ok + '/' + x.of + '）' : '')).join('；') + '</p>';
+    if (r.unused.length) h += '<details class="q-auto-unused"><summary>用不上（' + r.unused.length + ' 个）</summary>' + r.unused.map(x => esc(x.name) + '：' + esc(x.verdict)).join('<br>') + '</details>';
+    if (r.matched.length) h += '<div class="q-auto-actions"><button id="qAutoAsk" title="把这几个模型现在的结果交给 AI 对话，综合起来看。会调用 Claude，按用量计费">✦ 让 AI 综合看这几个模型</button><small>会调用 Claude，按用量计费</small></div>';
+    el.innerHTML = h + '<p class="fine">' + esc(r.note) + '</p>';
+  }
+  function askCombined() {
+    const r = Q.autoRes;
+    if (!r || !r.matched.length || !window.FEChat) return;
+    const list = r.matched.map(x => x.name + '（' + x.state_text + (x.of ? ' ' + x.ok + '/' + x.of : '') + '）').join('、');
+    setTab('chat');
+    window.FEChat.send(r.side_name + '一侧，按走势匹配到这几个模型：' + list + '。把它们综合起来看，现在怎么样？');
+  }
 
   function reset() { Q.seq++; Q.data = null; Q.steps = null; Q.total = null; Q.running = false; Q.shown = 1e9; $('#qMenu').hidden = true; chrome(); render(); loadTasks(); }
 
@@ -165,7 +249,11 @@ window.FEQuant = (() => {
       if (window.FEChat) window.FEChat.onState();         // 对话页顶上那一行（它在看哪张图）和开场问题跟着这一份结果变
     } catch (e) { if (my === Q.seq) c.toast('量化面板没取到：' + e.message, true); }
   }
-  const onState = () => { if (!fresh()) fetch(); else render(); if (Q.tab === 'models') loadScan(); };
+  const onState = () => {
+    if (Q.auto && c.stateFresh() && !autoFresh()) autoRun(Q.side);        // 自动匹配：换了标的、日期或 K 线级别，就按新的走势再挑一次
+    else if (!fresh()) fetch(); else render();
+    if (Q.tab === 'models') loadScan();
+  };
 
   // ---------- 页签 ----------
   function setTab(name, quiet) {
@@ -279,7 +367,7 @@ window.FEQuant = (() => {
     $('#qHint').textContent = Q.running || Q.steps ? '结构 → 规则信号 → 划线 → AI 深度解读，步骤见下方。' : '结构分析与规则信号均基于历史数据重放，仅供研究学习。';
     $('#evidence').hidden = hideFour();
     $('#fourDetail').hidden = Q.model !== 'four';
-    stepsCard();
+    stepsCard(); renderAuto();
     if (!ok) {
       $('#qBar').hidden = true; $('#qLegend').hidden = true; $('#qLabel').textContent = '';
       if (hideFour() && c.stateFresh()) { $('#sigCard').innerHTML = '<div class="eng">计算中…</div>'; $('#tiles').innerHTML = ''; }
@@ -390,7 +478,7 @@ window.FEQuant = (() => {
         return '<button class="m-side ' + (x ? x.state : '') + (on && s === Q.side ? ' cur' : '') + '" data-use="' + m.key + '" data-side="' + s + '" title="用这个模型的这一侧去分析">' + ARROW[s] + (s === 'long' ? '做多' : '做空') +
           ' · ' + esc(x ? x.verdict + (x.of ? '（' + x.ok + '/' + x.of + '）' : '') : '计算中…') + '</button>';
       }).join('');
-      const params = m.params.map(p => '<tr><td>' + esc(p.name) + '</td><td>' + esc(String(p.v)) + '</td><td><i class="src ' + p.src + '">' + (p.src === 'video' ? '录屏' : '估算') + '</i></td></tr>').join('');
+      const params = m.params.map(p => '<tr><td>' + esc(p.name) + '</td><td>' + esc(String(p.v)) + '</td><td><i class="src ' + p.src + '">' + (p.src === 'video' ? '录屏' : p.src === 'source' ? '原版' : '估算') + '</i></td></tr>').join('');
       return '<div class="card mcard' + (on ? ' on' : '') + '" data-model="' + m.key + '"><div class="m-head"><b>' + esc(m.name) + '</b><span class="m-badge">' + esc(m.tested) + '</span><span class="spacer"></span>' +
         (on ? '<span class="m-cur">正在用</span>' : '<button data-use="' + m.key + '" data-side="' + (m.sides.indexOf(Q.side) >= 0 ? Q.side : m.sides[0]) + '">用这个模型</button>') + '</div>' +
         '<p class="m-what">' + esc(m.what) + '</p><div class="m-sides">' + sides + '</div>' +
@@ -421,11 +509,15 @@ window.FEQuant = (() => {
       '<p class="fine" id="qStats">' + stat + '</p>' +
       (hi.rr_median != null ? '<p class="fine">这些触发的盈亏比，中间那一个是 ' + hi.rr_median.toFixed(2) + ' : 1。' + (hi.rr_median < 1 ? '目标比止损近，所以“先到目标”的次数多，并不说明能赚：赢一次赚的，不够亏一次赔的。' : '') + '</p>' : '') +
       '<p class="fine">没有扣手续费和滑点，也没有和“随便挑一天”对照过：这不是回测，只是把出现过的次数数一遍。</p></details>';
-    const P = d.signal.params, en = d.signal.est_note || {};
+    const P = d.signal.params, en = d.signal.est_note || {}, vn = d.signal.video_note || {}, sn = d.signal.source_note || {};
     if (P) {
-      h += '<details class="card thin" id="qParams"><summary>这一次用到的参数（' + (P.video ? '录屏原话 ' + Object.keys(P.video).length + ' 个，其余' : '') + '全部【估算】）</summary><div class="q-params">';
-      if (P.video) h += '<b>录屏里说了的</b><span>离成本线超过 ' + P.video.far * 100 + '% 不追</span><span>两段幅度相差不到 ' + P.video.abcd_tol * 100 + '%</span><span>量缩到前一段的 ' + P.video.dry * 100 + '% 以下</span><span>止损在 D 点外侧 ' + P.video.stop * 100 + '%</span>';
-      h += '<b>录屏没给、这里自己定的【估算】</b>' + Object.keys(P.est).map(k => '<span>' + esc(en[k] || k) + '：' + P.est[k] + '</span>').join('') + '</div></details>';
+      const nv = P.video ? Object.keys(P.video).length : 0, ns = P.source ? Object.keys(P.source).length : 0;
+      const list = (o, notes) => Object.keys(o).map(k => '<span>' + esc(notes[k] || k) + '：' + esc(String(o[k])) + '</span>').join('');
+      h += '<details class="card thin" id="qParams"><summary>这一次用到的参数（' + (nv ? '录屏原话 ' + nv + ' 个，' : '') + (ns ? '开源原版 ' + ns + ' 个，' : '') + '其余全部【估算】）</summary><div class="q-params">';
+      if (nv && d.model_key === 'houshou') h += '<b>录屏里说了的</b><span>离成本线超过 ' + P.video.far * 100 + '% 不追</span><span>两段幅度相差不到 ' + P.video.abcd_tol * 100 + '%</span><span>量缩到前一段的 ' + P.video.dry * 100 + '% 以下</span><span>止损在 D 点外侧 ' + P.video.stop * 100 + '%</span>';
+      else if (nv) h += '<b>录屏里说了的</b>' + list(P.video, vn);
+      if (ns) h += '<b>开源原版里的</b>' + list(P.source, sn);
+      h += '<b>' + (ns ? '原版没给' : '录屏没给') + '、这里自己定的【估算】</b>' + list(P.est, en) + '</div></details>';
     }
     box.innerHTML = h;
   }
@@ -749,5 +841,6 @@ window.FEQuant = (() => {
   }
 
   return { init, reset, onState, render, draw, run, setModel, set, use, setTab, goTo, profile, query, chrome, model: () => Q.model, side: () => Q.side, tab: () => Q.tab, hideFour, fresh, data: () => Q.data,
-    animating: () => Q.running || performance.now() < Q.animUntil, state: () => Q, setAnchor: anchor, loadTasks, loadRuns };
+    animating: () => Q.running || performance.now() < Q.animUntil, state: () => Q, setAnchor: anchor, loadTasks, loadRuns, setAuto, autoRun,
+    auto: () => ({ on: Q.auto, res: Q.autoRes }) };
 })();

@@ -345,7 +345,10 @@ def ai_history(t, limit=120):
 # 问题里点名的模型和标的：不用先在面板上切过去，就带上它们现在的结果（同一段代码现算）
 ASK_MODELS = {'four': ('四证', '四要素'), 'ertan': ('等二探', '二探'), 'feidao': ('不接飞刀', '飞刀'), 'houshou': ('后手',), 'sanjiao': ('不追半山腰', '半山腰'),
               'sanfen': ('三份法',), 'breakout': ('破位反抽', '突破回踩'), 'bubao': ('不爆仓',), 'genzhuang': ('跟庄',), 'huitou': ('等回头',),
-              'yindie': ('阴跌雷达', '阴跌'), 'shui': ('睡得着',), 'huiben': ('回本三看', '回本')}
+              'yindie': ('阴跌雷达', '阴跌'), 'shui': ('睡得着',), 'huiben': ('回本三看', '回本'),
+              'turtle': ('海龟',), 'td9': ('神奇九转', '九转'), 'supertrend': ('超级趋势', 'Supertrend', 'supertrend'), 'squeeze': ('收口突破',),
+              'mabull': ('均线多头', '多头排列'), 'rsi2': ('RSI(2)', 'RSI2', '两日RSI', '2 日 RSI'), 'double7': ('双七', 'Double 7'), 'nr7': ('NR7', '窄幅突破'),
+              'darvas': ('达瓦斯', '箱形', '箱体'), 'minervini': ('Minervini', '米奈尔维尼', '趋势模板')}
 ASK_TICKERS = {'SPCX': ('SPCX', 'SpaceX'), 'NVDA': ('NVDA', '英伟达', '辉达'), 'QQQ': ('QQQ', '纳指', '纳斯达克'), 'JOBY': ('JOBY', 'Joby')}
 MAX_ASKED = 4
 
@@ -395,6 +398,7 @@ def chat_context(t, asof, src):
         asked.append(dict(ticker=tk, model=q2['model_name'], side=q2['side_name'], asof=q2['asof'], price=q2['price'], **with_pre(q2, quant.facts_for_ai(q2))))
     if asked:
         body['asked'] = asked       # 他这一问点名的模型 / 标的现在的结果：回答以它为准，不用对话前面旧的那份
+    body['models_now'] = quant.models_now(t, x['q']['asof'], a['tf'])     # 这只标的每个模型、每个方向现在怎么说（不重放历史，很快；只给对话）
     if x['q']['is_latest'] and a['posmode'] == 'auto':
         mx = portfolio.chat_extras(t)   # 他自己的线、估值参考、这只的挂单和点名它的检查项（只给对话，不进 AI 解读的指纹）
         if mx:
@@ -430,7 +434,8 @@ def model_library():
     def generic(m):          # 建在 qmodel.py 上的模型：参数、说明、参考都写在各自的模型文件里
         mod = m['mod']
         ps = [dict(name=getattr(mod, 'VIDEO_NOTE', {}).get(k, k), v=v, src='video') for k, v in getattr(mod, 'VIDEO', {}).items()] + \
-             [dict(name=getattr(mod, 'EST_NOTE', {}).get(k, k), v=v, src='est') for k, v in getattr(mod, 'EST', {}).items()]
+             [dict(name=getattr(mod, 'SOURCE_NOTE', {}).get(k, k), v=v, src='source') for k, v in getattr(mod, 'SOURCE', {}).items()] + \
+             [dict(name=getattr(mod, 'EST_NOTE', {}).get(k, k), v=v, src='est') for k, v in getattr(mod, 'EST', {}).items()]      # source：开源原版里的数
         note = list(getattr(mod, 'NOTES', ())) or ['没有回测过。这一版是照录屏讲的规则重写的，不是原作者的代码；录屏里没给的数都标了估算。']
         return ps, note, list(getattr(mod, 'REFS', ()))
 
@@ -697,6 +702,9 @@ class Handler(BaseHTTPRequestHandler):
                     if asof and r['asof'] != asof:          # 休市日或周 K 中间的日子：用的是之前最近的一根，写明
                         r.update(asof_requested=asof, asof_note=f'{asof} 没有{"" if a["tf"] == "D" else "周 "}K 线（休市、在最新一根之后，或在一周中间），用的是它之前最近的一根：{r["asof"]}。')
                     return self._send(200, r)
+                if u.path == '/api/quant/auto':        # 自动匹配：点做多 / 做空时，这一侧哪个模型认得出现在的走势（模型参数不用，其余四个照常校验）
+                    t, a = q.get('ticker', ''), prof(q)
+                    return self._send(200, quant.auto_match(t, a['side'], asof_of(q, t), a['tf'], a['posmode'], a['horizon']))
                 if u.path == '/api/quant/models':
                     return self._send(200, model_library())
                 if u.path == '/api/quant/scan':

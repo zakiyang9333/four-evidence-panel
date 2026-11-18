@@ -127,7 +127,7 @@ button.m-side:hover{border-color:#3d4860}
 .m-params td:nth-child(2){text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .m-params td:nth-child(3){width:38px;text-align:right}
 .src{font-style:normal;font-size:10px;border-radius:4px;padding:0 5px;white-space:nowrap}
-.src.video{background:#0b3a4f;color:#8fdcff}.src.est{background:#3a2a0c;color:#f5c542}
+.src.video{background:#0b3a4f;color:#8fdcff}.src.est{background:#3a2a0c;color:#f5c542}.src.source{background:#1d3311;color:#a3e635}
 #qModelDetail{display:flex;flex-direction:column;gap:8px}
 #qModelDetail summary{cursor:pointer;font-size:12px;color:var(--mut)}
 #fourDetail{display:flex;flex-direction:column;gap:8px}

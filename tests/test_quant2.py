@@ -122,7 +122,13 @@ class EngineUntouched(unittest.TestCase):
             self.assertEqual(hashlib.md5(f.read()).hexdigest(), ENGINE_MD5)
 
     def test_registry_is_consistent(self):
-        self.assertEqual([m['key'] for m in quant.MODELS], ['four', 'ertan', 'feidao', 'houshou', 'sanjiao', 'sanfen', 'breakout', 'bubao', 'genzhuang', 'huitou', 'yindie', 'shui', 'huiben'])
+        self.assertEqual([m['key'] for m in quant.MODELS], ['four', 'ertan', 'feidao', 'houshou', 'sanjiao', 'sanfen', 'breakout', 'bubao', 'genzhuang',
+                                                            'turtle', 'td9', 'supertrend', 'squeeze', 'mabull', 'rsi2', 'double7', 'nr7', 'darvas', 'minervini', 'huitou', 'yindie', 'shui', 'huiben'])     # 开源经典五个：2026-11-18
+        for k in ('turtle', 'td9', 'supertrend', 'squeeze', 'mabull', 'rsi2', 'double7', 'nr7', 'darvas', 'minervini'):          # 不是录屏里的：来历写明开源，参数表分得清原版和估算
+            m = quant.MODEL[k]
+            self.assertEqual(m['group'], '开源经典'); self.assertNotIn('录屏', m['origin'])
+            self.assertTrue(m['mod'].SOURCE and set(m['mod'].SOURCE) == set(m['mod'].SOURCE_NOTE), k)
+            self.assertTrue(any('不是原作者的代码' in n for n in m['mod'].NOTES), k)
         self.assertEqual(quant.MODEL['four']['sides'], ('long',))            # 四证只有抄底一侧：规则不许改，也不替它编做空的
         self.assertEqual(set(quant.MODEL['houshou']['sides']), {'long', 'short'})
         self.assertEqual(set(quant.MODEL['breakout']['sides']), {'long', 'short'})
@@ -505,15 +511,17 @@ class Api(unittest.TestCase):
         self.assertEqual(self.get('/api/quant/scan?tf=W')['tf'], 'W')
         http(self.s.port, '/api/quant/scan?ticker=XXXX')
         L = self.get('/api/quant/models')
-        self.assertEqual([m['key'] for m in L['models']], ['four', 'ertan', 'feidao', 'houshou', 'sanjiao', 'sanfen', 'breakout', 'bubao', 'genzhuang', 'huitou', 'yindie', 'shui', 'huiben'])
+        self.assertEqual([m['key'] for m in L['models']], ['four', 'ertan', 'feidao', 'houshou', 'sanjiao', 'sanfen', 'breakout', 'bubao', 'genzhuang',
+                                                           'turtle', 'td9', 'supertrend', 'squeeze', 'mabull', 'rsi2', 'double7', 'nr7', 'darvas', 'minervini', 'huitou', 'yindie', 'shui', 'huiben'])
         for m in L['models']:
             self.assertTrue(m['params'] and m['notes'] and m['what'] and m['origin'], m['key'])
-            self.assertTrue(all(p['src'] in ('video', 'est') for p in m['params']))
+            self.assertTrue(all(p['src'] in ('video', 'est', 'source') for p in m['params']))
+            self.assertEqual(any(p['src'] == 'source' for p in m['params']), m['group'] == '开源经典', m['key'])        # 只有开源经典有“原版”参数，录屏模型没有
         self.assertEqual(sum(1 for p in next(m for m in L['models'] if m['key'] == 'houshou')['params'] if p['src'] == 'video'), 4)      # 后手：录屏里说了的只有 4 个
         bo_ = next(m for m in L['models'] if m['key'] == 'breakout')
         self.assertEqual(sum(1 for p in bo_['params'] if p['src'] == 'video'), 4)                    # 破位反抽 3.1：录屏给了 4 个数（1.5 倍、前 5 根、一半、1.0）
         self.assertIn('破位反抽 3.1', bo_['origin']); self.assertEqual(bo_['name'], '破位反抽 3.1')
-        self.assertEqual({m['kind'] for m in L['models'] if m['key'] in ('huitou', 'yindie', 'shui', 'huiben')}, {'watch'})
+        self.assertEqual({m['kind'] for m in L['models'] if m['key'] in ('huitou', 'yindie', 'shui', 'huiben', 'minervini')}, {'watch'})
         page = http(self.s.port, '/terminal')
         self.assertEqual(page[0], 200); self.assertIn('量化终端', page[1])
         import re

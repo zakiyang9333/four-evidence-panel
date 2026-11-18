@@ -8,6 +8,10 @@
 4. 核心仓：预案也不给止损和盈亏比。
 5. 预案只进 AI 对话：不进 AI 解读的输入，也不进它的指纹（facts_for_ai 里没有它）。
 6. 对话的系统提示写明预案怎么说：固定开头「预案（条件齐了才算数）」，不能说成现在可以进场。
+7. 对话还拿到 models_now：这只标的每个模型、每个方向现在怎么说（用 result(lite=True) 算，判定和完整算出来的一模一样）。
+   问“挂什么价”时：先给模型的价位，再按他自己的规则算，都没有就列参考价位、不替他挑。
+8. 自动匹配（/api/quant/auto）：点做多 / 做空时，这一侧每个模型只按它自己的判定排序（条件齐 → 等（有预案）→ 等 → 不追，同档清单成立多的在前），
+   排第一的就是图上画的那个；每个模型恰好出现一次；观察模型不参加挑选。
 """
 import json
 import os
@@ -166,6 +170,58 @@ class LiveData(unittest.TestCase):
         self.assertGreater(found, 0)
 
 
+class ModelsNow(unittest.TestCase):
+    def test_lite_gives_exactly_the_same_signal(self):
+        """lite 只省掉历史、结构线和表盘：信号、预案、卡片和完整算出来的逐项相同。"""
+        for t in panel.TICKERS:
+            d = quant.bars(t, 'D')['d']
+            for asof in (None, d[len(d) - 1 - 23]):
+                for m in quant.MODELS:
+                    for side in ('long', 'short'):
+                        full = quant.result(t, m['key'], asof, side, 20, 'D', 'flat')
+                        lite = quant.result(t, m['key'], asof, side, 20, 'D', 'flat', lite=True)
+                        where = (t, asof, m['key'], side)
+                        for k in ('signal', 'preplan', 'card', 'position_note', 'asof', 'price'):
+                            self.assertEqual(lite[k], full[k], (where, k))
+                        self.assertIsNone(lite['score'])
+                        if m['key'] != 'four':          # 四证的历史次数是引擎现成给的，不用重放；其余模型 lite 不重放历史
+                            self.assertEqual(lite['history']['n'], 0, where)
+
+    def test_one_row_per_model_and_side(self):
+        rows = quant.models_now('NVDA')
+        self.assertEqual(len(rows), sum(len(m['sides']) for m in quant.MODELS if 'D' in m['tfs']))
+        for r in rows:
+            self.assertTrue({'model', 'side', 'state', 'verdict'} <= set(r), r)
+            if 'plan' in r:
+                self.assertEqual(r['state'], '条件齐', r)
+            if 'preplan' in r:
+                self.assertIn(r['state'], ('等', '不追'), r)
+            self.assertFalse('plan' in r and 'preplan' in r, r)
+        self.assertNotIn('models_now', json.dumps(quant.facts_for_ai(quant.result('NVDA', 'four')), ensure_ascii=False))     # 只给对话
+
+
+class AutoMatch(unittest.TestCase):
+    def test_ranking_uses_only_the_models_own_verdicts(self):
+        tier = lambda r: {'ready': 0, 'wait': 1, 'avoid': 3}[r['state']] + (1 if r['state'] == 'wait' and 'preplan' not in r else 0)
+        for t in panel.TICKERS:
+            for side in ('long', 'short'):
+                r = quant.auto_match(t, side)
+                where = (t, side)
+                want = [m['key'] for m in quant.MODELS if side in m['sides'] and 'D' in m['tfs']]
+                got = [x['key'] for x in r['matched'] + r['watch'] + r['unused']]
+                self.assertEqual(sorted(got), sorted(want), where)                                  # 每个模型恰好出现一次
+                self.assertTrue(all(x['kind'] == 'trade' and x['state'] in ('ready', 'wait', 'avoid') for x in r['matched']), where)
+                self.assertTrue(all(x['kind'] == 'watch' and x['state'] in ('risk', 'watch') for x in r['watch']), where)
+                keys = [(tier(x), -(x['ok'] / x['of'] if x['of'] else 0)) for x in r['matched']]
+                self.assertEqual(keys, sorted(keys), where)                                         # 条件齐 → 等（有预案）→ 等 → 不追；同档清单成立多的在前
+                self.assertEqual(r['pick'], r['matched'][0]['key'] if r['matched'] else None, where)
+                for x in r['matched'][:3]:                                                          # 排序用的就是面板上那一份判定
+                    s = quant.result(t, x['key'], None, side, 20, 'D', 'auto', lite=True)['signal']
+                    self.assertEqual((x['state'], x['ok'], x['of']), (s['state'], sum(1 for c in s['checks'] if c['ok']), len(s['checks'])), (where, x['key']))
+                self.assertIn('没回测过', r['note']); self.assertEqual(r['side_name'], '做多' if side == 'long' else '做空')
+                self.assertTrue(r['trend']['label'])
+
+
 class Api(unittest.TestCase):
     """服务跑在临时目录：NVDA 换成后手“等”的合成行情（缩量那一项不成立），对着本机的假 Claude。"""
 
@@ -210,11 +266,25 @@ class Api(unittest.TestCase):
         self.assertEqual(ctx['quant']['preplan'], p)                         # 对话拿到的就是这一份
         self.assertNotIn('zone', ctx['quant']['plan'])                       # 计划价位照旧是空的
         self.assertIn('预案（条件齐了才算数）', sent['system'])
+        hs_long = next(r for r in ctx['models_now'] if r['model'].startswith('后手') and r['side'] == '做多')       # 每个模型都在小表里
+        self.assertEqual(hs_long['preplan'], {k: p[k] for k in ('zone', 'stop', 't1', 't2', 'rr') if p.get(k) is not None})
+        self.assertEqual(len(ctx['models_now']), sum(len(m['sides']) for m in quant.MODELS if 'D' in m['tfs']))
 
         FakeClaude.seen.clear()
         http(self.s.port, '/api/ai/analyze', dict(ticker='NVDA', model='houshou', force=True))      # AI 解读：输入里没有预案
         self.assertTrue(FakeClaude.seen)
         self.assertNotIn('preplan', json.dumps(FakeClaude.seen[-1][2], ensure_ascii=False))
+
+    def test_auto_match_endpoint(self):
+        code, body = http(self.s.port, '/api/quant/auto?ticker=NVDA&side=long')
+        self.assertEqual(code, 200, body)
+        r = json.loads(body)
+        hs_row = next(x for x in r['matched'] if x['key'] == 'houshou')                      # 后手“等”、带预案：在“等（有预案）”那一档或更前
+        self.assertEqual((hs_row['state'], hs_row['preplan']['t1']), ('wait', 137.0))
+        self.assertTrue(all(x['state'] == 'ready' or 'preplan' in x for x in r['matched'][:r['matched'].index(hs_row)]))
+        self.assertEqual(r['pick'], r['matched'][0]['key'])
+        self.assertEqual(http(self.s.port, '/api/quant/auto?ticker=NVDA&side=up')[0], 400)      # 不认识的方向：400，不悄悄换成做多
+        self.assertEqual(http(self.s.port, '/api/quant/auto?ticker=XXXX&side=long')[0], 404)
 
     def test_core_position_gets_no_stop_in_the_preplan(self):
         state = dict(asof_taipei='2026-11-16 11:10', positions=[dict(symbol='NVDA', type='stock', qty=10, avg_cost=100.0, side='safe', note='核心仓')])
@@ -233,6 +303,9 @@ class Prompt(unittest.TestCase):
     def test_system_prompt_says_how_to_use_it(self):
         for must in ('quant.preplan', '预案（条件齐了才算数）', '不能把预案说成现在可以进场', '不要把它填进上面那张表'):
             self.assertIn(must, chat.SYSTEM)
+        for must in ('models_now', '挂什么价', '按哪条挂由你定', '算出来是 X', '不替他挑价位', 'positions_stale', '不画这张表'):      # 问挂单价（2026-11-18）
+            self.assertIn(must, chat.SYSTEM)
+        self.assertIn('不说“买”“卖”', chat.SYSTEM)                                                                            # 不发指令这条还在
 
 
 def tearDownModule():

@@ -486,3 +486,18 @@ button.big:disabled{opacity:.6}
 .pf-table tr.pf-ignored td{opacity:.45}.pf-table tr.pf-ignored td.note{opacity:1}
 .pf-ign{margin-left:6px;padding:1px 8px;font-size:11px;border-radius:999px}
 #qNotify .n-row{display:flex;align-items:center;gap:8px;margin:0 0 7px;font-size:12.5px}#qNotify .n-row input:not([type]){flex:1;min-width:0}
+
+/* 自动匹配（2026-11-18）：点做多 / 做空，按走势挑这一侧的模型 */
+#qAuto .w-title{margin-bottom:4px}
+.q-auto-trend{margin:0 0 6px;font-size:12.5px;color:var(--mut)}.q-auto-trend b{color:var(--fg)}
+.q-auto-sub{font-size:12px;color:var(--mut);margin:0 0 6px}.q-auto-sub b{color:var(--fg)}
+.q-auto-list{display:flex;flex-direction:column;gap:5px}
+.q-auto-row{display:grid;grid-template-columns:20px 1fr auto;align-items:center;gap:2px 8px;text-align:left;padding:7px 10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--fg);cursor:pointer}
+.q-auto-row:hover{border-color:var(--acc)}.q-auto-row.cur{border-color:var(--acc);box-shadow:inset 3px 0 0 var(--acc)}
+.q-auto-row i{font-style:normal;color:var(--mut)}.q-auto-name{font-weight:600;font-size:13px}
+.q-auto-row em{font-style:normal;font-size:11.5px;padding:1px 8px;border-radius:999px;background:var(--panel);color:var(--mut);white-space:nowrap}
+.q-auto-row.ready em{color:#22c55e}.q-auto-row.wait em{color:var(--warn)}.q-auto-row.avoid em{color:var(--danger)}
+.q-auto-px{grid-column:2 / 4;font-size:11.5px;color:var(--mut)}
+.q-auto-watch{margin:7px 0 0;font-size:12px;color:var(--mut)}
+.q-auto-unused{margin-top:6px;font-size:12px;color:var(--mut)}.q-auto-unused summary{cursor:pointer}
+.q-auto-actions{display:flex;align-items:center;gap:8px;margin-top:8px}.q-auto-actions small{color:var(--mut);font-size:11px}
